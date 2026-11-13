@@ -18,6 +18,7 @@ export const config = {
   messages: env('MESSAGES', 'log'),   // log | live
   payment: env('PAYMENT', 'sms'),     // sms | stripe
   model: env('MODEL', 'scripted'),    // scripted | nova
+  knowledge: env('KNOWLEDGE', 'keyword'),   // keyword | embeddings (not built yet)
   twilio: {
     authToken: env('TWILIO_AUTH_TOKEN'),
     accountSid: env('TWILIO_ACCOUNT_SID'),

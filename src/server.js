@@ -10,6 +10,7 @@ import { store, findOrder, findMember } from './store.js';
 import { createTwilio, isLocal, safeEqual } from './twilio.js';
 import { createMessages } from './messages.js';
 import { createPayment } from './payment.js';
+import { createKnowledge, loadPassages } from './knowledge.js';
 
 const RECENT_MAX = 200;
 // Trip pages are private to whoever holds the link: never indexed, never cached, no referrer sent on.
@@ -106,7 +107,8 @@ export async function wireApp() {
   // One adapter per call, so projector lines carry the call id. The mock Cathay systems answer only on this
   // machine, so the adapter uses the local address, not the public one.
   const cathay = (callId) => createCathay({ base: `http://127.0.0.1:${app.address().port}`, callId });
-  const tools = createTools({ cathay, messages, texts, emails, baseUrl: config.baseUrl });
+  const knowledge = createKnowledge({ passages: loadPassages(), mode: config.knowledge });
+  const tools = createTools({ cathay, messages, texts, emails, knowledge, baseUrl: config.baseUrl });
   const app = createApp({
     tools, startSession: model.startSession, renderTripPage: trip.renderTripPage, notFoundPage: trip.notFoundPage,
     projectorHtml: readFileSync(new URL('./screens/projector.html', import.meta.url), 'utf8'),
