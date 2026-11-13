@@ -12,9 +12,16 @@ Contracts between modules: `CONTRACTS.md`. Read it before writing code.
 - **The AI talks, our code decides** (`STACK.md` §1): names, flights, fares and wheelchair codes come from tools and data, never from the model.
 - **Demo path:** one rehearsed golden path on seeded data. Reset with `POST /reset`.
 
-## Team setup (internal)
+## Team (internal: delete this section and `team/` before `git tag submission`)
 
-Setting up Claude Code for a teammate → follow `team/CLAUDE-SETUP.md`. `team/` also holds the 24-h timeline PDF. It's internal and is deleted before `git tag submission`.
+Five teammates work in this repo at once, each with their own Claude. Setting up Claude Code for a teammate → follow `team/CLAUDE-SETUP.md`. Timeline: `team/PLAN-24H-timeline.pdf`. The full git workflow is in `team/GIT.md`. Read it before the first commit of a session. Always:
+
+- **Know who you work for.** Ask the user's name (Owen, Marvel, Harell, Cavell, Max) once per session if you don't know it. File owners are in `team/GIT.md` §1.
+- **Start of session:** `git switch main && git pull --rebase`, then work on a branch `<name>/<task>`. Never commit straight onto `main`.
+- **Edit only the user's own files.** Shared files (`server.js`, `twilio.js`, `config.js`, `events.js`, `store.js`, `cathay.js`, `mock-cathay/`, `CONTRACTS.md`, `package.json`): remind the user to announce the change in the team chat first, keep it small, and open a PR. Never edit another person's file to make tests pass; tell the user who owns it.
+- **Before merging:** `node --test` passes, rebase on `origin/main`, test again, then `git merge --ff-only` into `main` and push. Merge within 1–2 hours.
+- **Conflicts** in someone else's or a shared file: `git rebase --abort` and ask the owner. Don't resolve it for them.
+- **Never:** force-push, `git reset --hard` on `main`, `git add -A` without reading `git status`, commit `.env` or secrets, deploy (Harell only), merge after the Sun 03:00 freeze (Owen only).
 
 ## Commands
 

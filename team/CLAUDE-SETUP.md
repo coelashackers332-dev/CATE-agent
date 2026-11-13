@@ -110,6 +110,7 @@ Finish with:
 
 - The person's role and stage job from the table above.
 - Where their hour-by-hour tasks are: `team/PLAN-24H-timeline.pdf` (their column) and the live plan at https://claude.ai/artifact/LfnC79vPPo9BkwSyLzgsYm (ask Max for access).
+- How we share the repo: `team/GIT.md`. Summarise for them which files they own (§1) and the per-task flow (§2).
 - The repo rules from `CLAUDE.md`: every line is new (samples are reading material only), MIT / BSD / Apache-2.0 dependencies only, no secrets or real phone numbers in git (they go in `.env`), and read `CONTRACTS.md` before writing code.
 
 ### Don't
