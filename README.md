@@ -29,8 +29,9 @@ The voice model only listens, talks and chooses which tool to call. Every action
 - **Flights and fares** come from our data. The model can't invent a flight or a price.
 - **Wheelchair codes** come from a fixed rule table, not from the model's judgement.
 - **Nothing about the member** reaches the model before verification passes, and the model never sees the correct verification answer.
+- **General Cathay answers** come only from checked passages, each with its source. With no relevant passage, CATE says it does not have that information and offers a member of staff.
 
-The 7 tools, with their inputs, results and rules, are documented in [`docs/TOOLS.md`](docs/TOOLS.md).
+The 8 tools, with their inputs, results and rules, are documented in [`docs/TOOLS.md`](docs/TOOLS.md).
 
 ## Architecture
 
@@ -56,11 +57,12 @@ Caller's phone ──► Twilio (phone number, call audio 8 kHz μ-law, SMS)
 | Part | State |
 |---|---|
 | Module contracts (`CONTRACTS.md`), configuration, event log, in-memory store, seed data | ✅ Done |
-| Mock Cathay systems + adapter, the 7 tools and their rules | ✅ Done, tested |
+| Mock Cathay systems + adapter, the 7 booking tools and their rules | ✅ Done, tested |
 | Server: Twilio webhook and call audio, signature checks, view-only pages, reset | ✅ Done, tested with simulated requests; not yet run against a live Twilio number |
 | Screens: projector view, trip page with needs card, texts, pay email | ✅ Done, tested |
 | Payment: family member replies PAY by text | ✅ Done, tested |
 | Scripted stand-in for the voice model (plays the golden path, no audio) | ✅ Done |
+| General Cathay questions (`ask_cathay`): search over passages in `knowledge/`, source shown on the projector | ✅ Tool and keyword search done, tested. The 23 passages are drafts, not yet verified against Cathay's pages. Search by meaning (embeddings) is planned. |
 | Voice model: Amazon Nova 2 Sonic over the call audio | Planned |
 | Real schedules (OAG snapshot), live SMS and email, Stripe test checkout | Planned |
 
@@ -70,11 +72,13 @@ Caller's phone ──► Twilio (phone number, call audio 8 kHz μ-law, SMS)
 CONTRACTS.md          interfaces between modules (read before writing code)
 CLAUDE.md             working rules for this repo
 data/                 seed data for the mock Cathay systems (JSON)
-docs/                 architecture diagram, TOOLS.md (the 7 tools)
+docs/                 architecture diagram, TOOLS.md (the 8 tools)
 src/server.js         HTTP routes, projector feed, wiring
 src/twilio.js         call webhook, call audio stream, PAY reply
 src/mulaw.js          phone audio conversion (G.711 mu-law <-> PCM)
-src/tools.js          the 7 tools and their rules
+src/tools.js          the 8 tools and their rules
+src/knowledge.js      search over the knowledge passages (for ask_cathay)
+knowledge/            general Cathay knowledge: short passages, each with source and date checked
 src/cathay.js         the one adapter to Cathay's systems
 src/mock-cathay/      mock Membership, Orders and Schedule systems
 src/model/            voice model drivers (scripted.js; nova.js to come)

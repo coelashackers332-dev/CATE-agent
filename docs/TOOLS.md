@@ -1,6 +1,6 @@
 # CATE tools
 
-The voice model can only listen, talk, and choose one of the 7 tools on this page. Each tool is a function in our code (`src/tools.js`). The rules live in that function, so the model cannot talk its way past them.
+The voice model can only listen, talk, and choose one of the 8 tools on this page. Each tool is a function in our code (`src/tools.js`). The rules live in that function, so the model cannot talk its way past them.
 
 | # | Tool | In one line |
 |---|---|---|
@@ -11,8 +11,9 @@ The voice model can only listen, talk, and choose one of the 7 tools on this pag
 | 5 | [`set_assistance`](#5-set_assistance) | Sets the wheelchair code from a fixed table |
 | 6 | [`hold_booking`](#6-hold_booking) | Reads the trip back, then holds the booking after a yes |
 | 7 | [`send_pay_link`](#7-send_pay_link) | Sends the pay request to the family member on file |
+| 8 | [`ask_cathay`](#8-ask_cathay) | Answers a general question about flying with Cathay, from checked passages only |
 
-The usual order in a call is 1 → 2 → 3 → 4 (optional) → 5 → 6 (twice) → 7.
+The usual order in a call is 1 → 2 → 3 → 4 (optional) → 5 → 6 (twice) → 7. Tool 8 can be called at any point after verification, whenever the caller asks a general question.
 
 ## Rules that apply to every tool
 
@@ -262,6 +263,50 @@ Sends the pay request to the family member linked to the membership. Call it aft
 | No held booking | Hold the booking first. |
 | No family payer on file | Say that a member of staff will call him about payment. |
 
+## 8. `ask_cathay`
+
+Answers a general question about flying with Cathay that is not about this booking: baggage, check-in times, wheelchair help at the airport, mobility aids, medical equipment, changing a ticket. This is retrieval-augmented generation (RAG): our code retrieves checked passages, and the model words a short answer from them.
+
+**Input**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `question` | string | yes | The caller's question in his own words, e.g. "Can I bring my own wheelchair?" |
+
+**Returns, when a passage is relevant**
+
+```json
+{ "ok": true, "found": true,
+  "passages": [
+    { "title": "Bringing your own wheelchair",
+      "text": "You can bring your own wheelchair. Cathay carries it free of charge, on top of your baggage allowance. …",
+      "source": "https://www.cathaypacific.com/cx/en_US/prepare-trip/help-for-passengers/disability-and-mobility-assistance/mobility-assistance.html",
+      "checked": "2026-11-14 draft" }
+  ],
+  "say": "Answer only from these passages, in one or two short sentences, and say it is from the Cathay website. If they do not answer his question, say you do not have that information." }
+```
+
+**Returns, when nothing is relevant**
+
+```json
+{ "ok": true, "found": false,
+  "say": "Say you do not have that information, and that a member of staff can help. Do not guess." }
+```
+
+**Rules in code**
+
+- The model gets at most 3 passages, and only passages from `knowledge/*.md`. With no relevant passage it gets nothing to build an answer from, and is told to say so and offer a member of staff.
+- Every passage has a source link and the date it was checked. A passage without both is skipped when the files are loaded, so nothing unsourced can be read out.
+- The projector shows the source of each answer ("Cathay knowledge · Source: title · page · checked date"), or that there was no checked answer.
+- "Relevant" is decided by the search, not the model. With `KNOWLEDGE=keyword` (current), a passage must contain at least half of the question's words, weighted by how rare they are. `KNOWLEDGE=embeddings` (planned, Amazon Bedrock) will match by meaning.
+- Not for flights, prices or the caller's own booking: those come from `find_flights` and the booking.
+
+**Refusal:** an empty question → "Ask him what he would like to know."
+
+**Knowledge files.** Passages live in `knowledge/*.md`, one file per topic. Format: a `## Title` line, then `Source:`, `Checked:`, an optional `Asks:` line (ways a caller might put the question; searched, never read out), a blank line, and the answer in plain spoken words. The search is `src/knowledge.js`.
+
+**Status of the passages.** The 23 passages are drafts, marked `Checked: 2026-11-14 draft`. They were written from search-result summaries of Cathay's pages and have not yet been verified against those pages by a person.
+
 ---
 
 ## For developers
@@ -269,13 +314,14 @@ Sends the pay request to the family member linked to the membership. Call it aft
 ```js
 import { createTools } from './src/tools.js';
 
-const { specs, runTool } = createTools({ cathay, messages, texts, emails, baseUrl });
+const { specs, runTool } = createTools({ cathay, messages, texts, emails, knowledge, baseUrl });
 // specs:   [{ name, description, inputSchema }]  → given to the voice model as its tool list
 // runTool: (name, args, call) → Promise<result>  → called when the model asks for a tool
 ```
 
 - `cathay` is a factory `(callId) => adapter` (see `src/cathay.js`), so events carry the call id.
+- `knowledge` is `{ search(question, limit) }` from `createKnowledge` in `src/knowledge.js`. It is optional: without it, `ask_cathay` always answers that it does not have the information.
 - `call` is the call context from `CONTRACTS.md` §2. Tools keep their state on it: `verified`, `token`, `profile`, `options`, `assistance`, `pendingHold`, `ref`, `order`, `pageCode`, `payRequested`.
-- Tests: `test/tools.test.js` covers each tool and its refusals; `test/golden.test.js` plays the whole call end to end.
+- Tests: `test/tools.test.js` covers each tool and its refusals; `test/knowledge.test.js` covers the search and the knowledge files; `test/golden.test.js` plays the whole booking call end to end.
 
-**Status.** So far the tools have been called only by the scripted stand-in (`src/model/scripted.js`), which calls them in the right order every time. They have not yet been driven by the live voice model, and the flights in the examples are placeholders until the real schedule snapshot is loaded.
+**Status.** So far the 7 booking tools have been called only by the scripted stand-in (`src/model/scripted.js`), which calls them in the right order every time; `ask_cathay` has been called only from tests. None of the tools has yet been driven by the live voice model. The flights in the examples are placeholders until the real schedule snapshot is loaded, and the knowledge passages are unverified drafts.
