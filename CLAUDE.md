@@ -16,7 +16,7 @@ Contracts between modules: `CONTRACTS.md`. Read it before writing code.
 
 Five teammates work in this repo at once, each with their own Claude. Setting up Claude Code for a teammate → follow `team/CLAUDE-SETUP.md`. Timeline: `team/PLAN-24H-timeline.pdf`. The full git workflow is in `team/GIT.md`. Read it before the first commit of a session. Always:
 
-- **Know who you work for.** Ask the user's name (Owen, Marvel, Harell, Cavell, Max) once per session if you don't know it. File owners are in `team/GIT.md` §1.
+- **Know who you work for.** The user's personal `~/.claude/CLAUDE.md` names them (written during setup). If it doesn't, ask the user's name (Owen, Marvel, Harell, Cavell, Max) once per session. File owners are in `team/GIT.md` §1.
 - **Start of session:** `git switch main && git pull --rebase`, then work on a branch `<name>/<task>`. Never commit straight onto `main`.
 - **Edit only the user's own files.** Shared files (`server.js`, `twilio.js`, `config.js`, `events.js`, `store.js`, `cathay.js`, `mock-cathay/`, `CONTRACTS.md`, `package.json`): remind the user to announce the change in the team chat first, keep it small, and open a PR. Never edit another person's file to make tests pass; tell the user who owns it.
 - **Before merging:** `node --test` passes, rebase on `origin/main`, test again, then `git merge --ff-only` into `main` and push. Merge within 1–2 hours.

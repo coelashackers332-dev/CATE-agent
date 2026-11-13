@@ -92,7 +92,56 @@ Run one `claude plugin install <plugin>` per entry. Why each one:
 
 If an install asks for a login or an API key, skip that part and tell the user. Nothing in the demo path needs it.
 
-### 6. Check
+### 6. Personal note in `~/.claude/CLAUDE.md`
+
+Write a note so that in every future session the agent knows who it works for, without asking. The file is the user's personal Claude memory (`~/.claude/CLAUDE.md`; on Windows `%USERPROFILE%\.claude\CLAUDE.md`). It's outside git, and Claude Code reads it at the start of every session.
+
+- If the file doesn't exist, create it.
+- If it exists, **keep everything in it** and add the note at the end. If it already has a `## CATE-agent repo` section, replace only that section.
+- Show the user the final note.
+
+The note is the block for the person named in step 1:
+
+**Owen**
+```
+## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
+When working in the CATE-agent repo, I'm Owen: voice, the Nova 2 Sonic driver.
+My files: src/model/nova.js, src/mulaw.js. I merge all fixes after the Sun 03:00 freeze.
+Stage: I speak parts 4–6 and answer tech questions. Everything else: follow team/GIT.md and the repo CLAUDE.md.
+```
+
+**Marvel**
+```
+## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
+When working in the CATE-agent repo, I'm Marvel: system prompt, RAG passages, booking rules + tests.
+My files: src/tools.js, src/knowledge.js, src/model/prompt.js, knowledge/, data/.
+Stage: I'm the caller (Mr Wong). Everything else: follow team/GIT.md and the repo CLAUDE.md.
+```
+
+**Harell**
+```
+## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
+When working in the CATE-agent repo, I'm Harell: infra (EC2, Caddy, IAM, SSM), live SMS + email, payment, security pass.
+My files: src/messages.js, src/payment.js, deploy.sh + Caddy config, README.md, .env.example. I'm the only one who deploys and adds dependencies.
+Stage: Daniel's phone + timekeeper. Everything else: follow team/GIT.md and the repo CLAUDE.md.
+```
+
+**Cavell**
+```
+## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
+When working in the CATE-agent repo, I'm Cavell: projector view, trip page on real phones, screenshots, fallback video.
+My files: src/screens/*.
+Stage: operator, I drive the laptop. Everything else: follow team/GIT.md and the repo CLAUDE.md.
+```
+
+**Max**
+```
+## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
+When working in the CATE-agent repo, I'm Max: pitch, deck, one-pager, submissions. I own no code files, only team/.
+Stage: I speak parts 1–3 and 7 and lead Q&A. Everything else: follow team/GIT.md and the repo CLAUDE.md.
+```
+
+### 7. Check
 
 ```
 claude plugin list
@@ -104,7 +153,7 @@ Every plugin from steps 4 and 5 must show as enabled. Then tell the user:
 2. Type `/` and check that `caveman`, `ponytail` and the `superpowers:` skills appear.
 3. Run `node --test` in this repo. All tests should pass.
 
-### 7. Hand over
+### 8. Hand over
 
 Finish with:
 
