@@ -1,0 +1,7 @@
+[
+  { "flight": "CX0V1", "date": "2027-02-19", "cabin": "economy", "return_fare_hkd": 8420 },
+  { "flight": "CX0V3", "date": "2027-02-19", "cabin": "economy", "return_fare_hkd": 7960 },
+  { "flight": "CX0V5", "date": "2027-02-19", "cabin": "economy", "return_fare_hkd": 8420 },
+  { "flight": "CX0T1", "date": "2027-02-19", "cabin": "economy", "return_fare_hkd": 6900 },
+  { "flight": "CX0V1", "date": "2027-02-20", "cabin": "economy", "return_fare_hkd": 8420 }
+]

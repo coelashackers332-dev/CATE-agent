@@ -1,0 +1,17 @@
+[
+  {
+    "member_id": "DEMO-0001",
+    "name": { "family": "WONG", "given": "TAK MING" },
+    "phone": "+85200000001",
+    "email": "mr.wong@example.com",
+    "language": "en",
+    "speech": { "pace": "slow", "large_text": true },
+    "prefs": { "seat": "window", "meal": "vegetarian", "bags": 1, "earliest_departure": "09:00" },
+    "needs": { "walk_in_cabin": true, "stairs": true, "long_distance": false },
+    "delegates": [
+      { "name": "Daniel Wong", "relation": "son", "phone": "+85200000002",
+        "email": "daniel@example.com", "consent": "2026-09-01" }
+    ],
+    "consent": { "needs_stored": "2026-05-01" }
+  }
+]

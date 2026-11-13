@@ -1,0 +1,15 @@
+[
+  {
+    "ref": "P4L8RD",
+    "member_id": "DEMO-0001",
+    "status": "flown",
+    "segments": [
+      { "flight": "CX0K1", "from": "HKG", "to": "KIX", "city": "Osaka", "date": "2026-05-12" },
+      { "flight": "CX0K2", "from": "KIX", "to": "HKG", "city": "Hong Kong", "date": "2026-05-19" }
+    ],
+    "cabin": "economy",
+    "seat": "window",
+    "meal": "vegetarian",
+    "ssr": ["WCHR"]
+  }
+]
