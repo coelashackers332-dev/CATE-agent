@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>CATE live call</title>
+<style>
+  /* The projector view: how a room follows a phone call. Light ground and dark ink, because
+     projectors wash out dark screens. System fonts only; nothing is loaded from other sites. */
+  :root {
+    --ink: #0b1a1a; --jade-900: #01484b; --jade-600: #00787a; --mint: #e4f2ef; --sun: #f5b83d; --sun-soft: #fdf1d6;
+    --paper: #ffffff; --ground: #eef3f2; --muted: #4e5e5d; --line: #d5e2df; --ok: #1d6b47; --bad: #a32a1d;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang HK", "Microsoft JhengHei", sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { display: grid; grid-template-rows: auto 1fr auto; background: var(--ground); color: var(--ink); font-family: var(--sans); overflow: hidden; }
+
+  .strip { display: flex; align-items: center; gap: 1.2vw; padding: 1vh 2vw; background: var(--jade-900); color: #fff; }
+  .brand { font-size: clamp(20px, 1.8vw, 34px); font-weight: 700; margin-right: auto; }
+  .brand span { font-weight: 400; color: #d9ecea; }
+  .pill { font-size: clamp(15px, 1.2vw, 24px); font-weight: 700; padding: .25em .9em; border-radius: 99px; background: rgba(255,255,255,.14); white-space: nowrap; }
+  .pill.live { background: var(--sun); color: #3d2a00; }
+  .pill.paid { background: #bfe8d2; color: #0d3d27; }
+  .pill.warn { background: #ffd9d2; color: #6b1509; }
+
+  main { display: grid; grid-template-columns: 58fr 42fr; gap: 1.2vw; padding: 1.2vw; min-height: 0; }
+  section { display: flex; flex-direction: column; min-height: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 14px; }
+  h2 { font-size: clamp(14px, 1vw, 20px); font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--jade-600); padding: 1.2vh 1.4vw .8vh; }
+  .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 1.4vw 1.4vh; }
+  .scroll:empty::before { content: attr(data-empty); display: block; padding-top: 1vh; color: var(--muted); font-size: clamp(18px, 1.5vw, 28px); }
+
+  /* Left: the conversation, readable from the back of the room */
+  .turn { margin-top: 1.6vh; padding: .5em .8em; border-left: .35em solid var(--sun); background: var(--sun-soft); border-radius: 0 12px 12px 0; }
+  .turn.cate { border-left-color: var(--jade-600); background: var(--mint); }
+  .turn .who { font-size: clamp(14px, 1.05vw, 22px); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .turn .text { font-size: clamp(24px, 2.35vw, 46px); line-height: 1.25; overflow-wrap: anywhere; }
+
+  /* Right: what our code and Cathay's (mock) systems did */
+  .line { display: flex; flex-wrap: wrap; gap: 0 .9em; align-items: baseline; padding: .45em 0; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: clamp(15px, 1.2vw, 24px); line-height: 1.35; }
+  .line .name { font-weight: 700; color: var(--jade-900); }
+  .line .what { overflow-wrap: anywhere; }
+  .line .res { margin-left: auto; text-align: right; overflow-wrap: anywhere; }
+  .line .res.ok { color: var(--ok); }
+  .line .res.bad { color: var(--bad); }
+  .line.tool { color: var(--muted); }
+  .line.tool .name { color: var(--muted); }
+  .line.screen .name { background: var(--sun); color: #3d2a00; padding: 0 .5em; border-radius: 6px; }
+  .line.state { font-family: var(--sans); font-weight: 700; font-size: clamp(18px, 1.5vw, 30px); color: var(--jade-900); background: var(--mint); padding: .45em .7em; border-radius: 10px; border-bottom: 0; margin: .4em 0; }
+  .turn, .line { animation: in .25s ease-out; }
+  @keyframes in { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { .turn, .line { animation: none; } }
+
+  footer { padding: .8vh 2vw 1vh; font-size: clamp(13px, .95vw, 19px); color: var(--muted); display: flex; gap: 2vw; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<header class="strip">
+  <p class="brand">Cathay CATE <span>· booking by phone call</span></p>
+  <p class="pill" id="conn">Connecting</p>
+  <p class="pill" id="call">Waiting for a call</p>
+  <p class="pill" id="booking">No booking yet</p>
+</header>
+
+<main>
+  <section aria-label="Conversation">
+    <h2>The call</h2>
+    <div class="scroll" id="talk" data-empty="Waiting for a call."></div>
+  </section>
+  <section aria-label="Systems">
+    <h2>Behind the call · Cathay systems, mocked</h2>
+    <div class="scroll" id="log" data-empty="Each step CATE takes shows here."></div>
+  </section>
+</main>
+
+<footer>
+  <span>Mock Cathay systems · seeded data · illustrative fares</span>
+  <span>R = reset</span>
+</footer>
+
+<script>
+  const key = new URLSearchParams(location.search).get('key') || '';
+  const $ = (id) => document.getElementById(id);
+  const talk = $('talk'), log = $('log');
+
+  // Event text only ever goes in through textContent, never as HTML.
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function add(box, node) { box.append(node); box.scrollTop = box.scrollHeight; }
+  function pill(id, text, cls) { $(id).textContent = text; $(id).className = 'pill' + (cls ? ' ' + cls : ''); }
+  const cut = (s, n = 160) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
+
+  // One short line from tool args or a tool result: "to: YVR · after: 2027-02-06", "options: 3 items".
+  function brief(v) {
+    if (v == null) return '';
+    if (typeof v !== 'object') return String(v);
+    if (Array.isArray(v)) return v.length + (v.length === 1 ? ' item' : ' items');
+    return Object.entries(v).filter(([k]) => k !== 'ok').map(([k, x]) => k + ': ' + (x !== null && typeof x === 'object' ? brief(Array.isArray(x) ? x : '{…}') : x)).join(' · ');
+  }
+
+  function line(cls, name, what, res, ok) {
+    const row = el('div', 'line ' + cls);
+    row.append(el('span', 'name', name), el('span', 'what', cut(what || '')));
+    if (res) row.append(el('span', 'res' + (ok === true ? ' ok' : ok === false ? ' bad' : ''), cut(res)));
+    add(log, row);
+  }
+  const mark = (ok) => (ok === false ? '✗ ' : ok === true ? '✓ ' : '');
+  const SCREENS = { options_page: 'Trip page', pay_email: 'Pay email', sms: 'Text message' };
+
+  function clearAll() {
+    talk.replaceChildren(); log.replaceChildren();
+    pill('call', 'Waiting for a call'); pill('booking', 'No booking yet');
+  }
+
+  function show(ev) {
+    if (!ev || typeof ev !== 'object') return;
+    const reset = ev.kind === 'system' && ev.system === 'Demo' && ev.action === 'reset';
+    if (reset) clearAll();
+    else if (ev.call_id) pill('call', 'Call live', 'live');
+
+    switch (ev.kind) {
+      case 'caller_said':
+      case 'cate_said': {
+        const cate = ev.kind === 'cate_said';
+        const turn = el('div', 'turn' + (cate ? ' cate' : ''));
+        turn.append(el('p', 'who', cate ? 'CATE' : 'Mr Wong'), el('p', 'text', ev.text));
+        add(talk, turn);
+        break;
+      }
+      case 'system': {
+        // The contract has no call start/end event, so a system line about the call ending is the cue.
+        if (/call (has )?(ended|over)|hung up|hang ?up/i.test(ev.action + ' ' + ev.summary)) pill('call', 'Call ended');
+        const summary = String(ev.summary ?? '').replace(/^[✓✗]\s*/, '');
+        line('sys', '→ ' + ev.system, ev.action, mark(ev.ok) + summary, ev.ok);
+        break;
+      }
+      case 'tool_call':
+        line('tool', 'tool ' + ev.name, brief(ev.args));
+        break;
+      case 'tool_result': {
+        const ok = !(ev.result && ev.result.ok === false);
+        line('tool', 'tool ' + ev.name, '', mark(ok) + (brief(ok ? ev.result : ev.result.error) || 'done'), ok);
+        break;
+      }
+      case 'screen':
+        line('screen', SCREENS[ev.what] || ev.what, ev.summary);
+        break;
+      case 'state':
+        add(log, el('div', 'line state', 'Booking ' + ev.ref + ' → ' + ev.status));
+        pill('booking', ev.ref + ' · ' + ev.status, ev.status === 'paid' ? 'paid' : ev.status === 'held' ? 'live' : '');
+        break;
+    }
+  }
+
+  function connect() {
+    const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/events?key=' + encodeURIComponent(key));
+    ws.onopen = () => pill('conn', 'Connected');
+    ws.onmessage = (m) => {
+      let data;
+      try { data = JSON.parse(m.data); } catch { return; }
+      [].concat(data).forEach(show); // one event per message; a list (a replay on connect) also works
+    };
+    ws.onclose = () => { pill('conn', 'Reconnecting', 'warn'); setTimeout(connect, 1000); };
+    ws.onerror = () => ws.close();
+  }
+  connect();
+
+  // R: reset the demo data on the server and clear this screen.
+  addEventListener('keydown', (e) => {
+    if (e.key.toLowerCase() !== 'r' || e.ctrlKey || e.metaKey || e.altKey || e.repeat) return;
+    clearAll();
+    fetch('/reset', { method: 'POST', headers: { 'x-admin-key': key } })
+      .then((r) => { if (!r.ok) throw new Error(r.status); })
+      .catch((err) => pill('conn', 'Reset failed (' + err.message + ')', 'warn'));
+  });
+</script>
+</body>
+</html>

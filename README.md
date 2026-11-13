@@ -6,7 +6,7 @@ CATE is a voice assistant for travellers who find online booking hard: older tra
 
 Built for **Cathay Hackathon 2026**, challenge *Premium Travel: Making Travel More Accessible*, by team **E332 Coelas Hackers**.
 
-> **Status: work in progress.** This repo currently holds the scaffold: module contracts, configuration, the event log, the in-memory store and the seed data. The tools, server, screens and voice model are built during the hackathon. The [Status](#status) table below shows what exists.
+> **Status: work in progress.** The booking logic, server, screens and payment loop run end to end with a scripted stand-in for the voice model. The live voice model, real schedules and live messages are next. The [Status](#status) table below shows what exists.
 
 ## How a call works
 
@@ -54,22 +54,33 @@ Caller's phone ──► Twilio (phone number, call audio 8 kHz μ-law, SMS)
 | Part | State |
 |---|---|
 | Module contracts (`CONTRACTS.md`), configuration, event log, in-memory store, seed data | ✅ Done |
-| Mock Cathay systems + adapter, the 7 tools and their rules | Planned |
-| Server: Twilio webhook and call audio, signature checks, view-only pages, reset | Planned |
-| Screens: projector view, trip page with needs card, texts, pay email | Planned |
+| Mock Cathay systems + adapter, the 7 tools and their rules | ✅ Done, tested |
+| Server: Twilio webhook and call audio, signature checks, view-only pages, reset | ✅ Done, tested with simulated requests; not yet run against a live Twilio number |
+| Screens: projector view, trip page with needs card, texts, pay email | ✅ Done, tested |
+| Payment: family member replies PAY by text | ✅ Done, tested |
+| Scripted stand-in for the voice model (plays the golden path, no audio) | ✅ Done |
 | Voice model: Amazon Nova 2 Sonic over the call audio | Planned |
-| Real schedules (OAG snapshot), live SMS, payment (Stripe test mode) | Planned |
+| Real schedules (OAG snapshot), live SMS and email, Stripe test checkout | Planned |
 
 ## Repo layout
 
 ```
-CONTRACTS.md      interfaces between modules (read before writing code)
-CLAUDE.md         working rules for this repo
-data/             seed data for the mock Cathay systems (JSON)
-docs/             architecture diagram
-src/config.js     settings from .env
-src/events.js     call event bus + one log file per run
-src/store.js      in-memory state: members, orders, pages, sessions; reset
+CONTRACTS.md          interfaces between modules (read before writing code)
+CLAUDE.md             working rules for this repo
+data/                 seed data for the mock Cathay systems (JSON)
+docs/                 architecture diagram
+src/server.js         HTTP routes, projector feed, wiring
+src/twilio.js         call webhook, call audio stream, PAY reply
+src/mulaw.js          phone audio conversion (G.711 mu-law <-> PCM)
+src/tools.js          the 7 tools and their rules
+src/cathay.js         the one adapter to Cathay's systems
+src/mock-cathay/      mock Membership, Orders and Schedule systems
+src/model/            voice model drivers (scripted.js; nova.js to come)
+src/screens/          projector view, trip page, texts, emails
+src/payment.js        what happens when a booking is paid
+src/messages.js       SMS and email sending (log or live)
+src/config.js, events.js, store.js   settings, event bus + run log, in-memory state
+test/                 node --test; golden.test.js plays the whole booking
 ```
 
 ## Run it
@@ -80,8 +91,18 @@ Requires Node.js 22 or later.
 npm install
 cp .env.example .env     # then fill in your own values
 npm test                 # node --test
-npm start                # node src/server.js (once the server is in)
+npm start                # node src/server.js; prints the projector address
 ```
+
+To play the whole booking without a phone (`MODEL=scripted`), open the projector address in a browser, then:
+
+```sh
+curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/simulate          # the call
+curl -X POST -d "From=%2B85200000002&Body=PAY" http://localhost:8080/twilio/sms           # Daniel pays
+curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/reset                 # start again
+```
+
+The trip page link is printed in the server console with the text message.
 
 All settings are in `.env.example`. `MODEL=scripted` runs the golden path without a voice model, and `MESSAGES=log` prints texts and emails to the console instead of sending them.
 

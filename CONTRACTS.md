@@ -23,7 +23,7 @@ Design docs (read-only, in the planning folder `D:\CATHAY HACKATHON\`): `onday/S
 | `cate_said` | `text` | model driver |
 | `tool_call` | `name`, `args` | `runTool` |
 | `tool_result` | `name`, `result` (what the model sees) | `runTool` |
-| `system` | `system` ("Membership" \| "Orders" \| "Schedule" \| "Messages" \| "Payment" \| "Demo"), `action`, `ok`, `summary` | `cathay.js`, messages, payment, reset |
+| `system` | `system` ("Membership" \| "Orders" \| "Schedule" \| "Messages" \| "Payment" \| "Phone" \| "Demo"), `action`, `ok`, `summary` | `cathay.js`, messages, payment, reset |
 | `screen` | `what` ("options_page" \| "pay_email" \| "sms"), `summary` | tools |
 | `state` | `ref`, `status` | `setOrderStatus` |
 
@@ -148,6 +148,17 @@ export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref
 | `POST /reset`, `POST /dev/simulate` | team laptop | admin secret (`x-admin-key` header) |
 | `/mock-cathay/*` | our own `cathay.js` | local only |
 | everything else, including `/` | nobody | the same "Not found" |
+
+## Changes made during the build (2026-11-13)
+
+- `createTools` takes `deps.cathay` as a factory `(callId) => adapter`, so system events carry the call id.
+- `cathay.searchFlights` is one round-trip search and returns `{ out, back }`. `holdOrder` returns the full order. `getDelegate(token)` was added (server side only; contacts never reach the model). `getProfile` has no `recent_trips`; `apply_profile` merges them from `getTripHistory`.
+- `/mock-cathay/*` answers only local requests carrying the per-process service key (`src/mock-cathay/key.js`).
+- Tools keep extra fields on the call: `profile`, `order`, `verifyFails`, `payRequested`. Three wrong verification answers lock the call until reset. `hold_booking` refuses until `set_assistance` has run, and it sets `page.ref`. `find_flights` needs both dates as `YYYY-MM-DD`.
+- The server emits `system` events from "Phone" (`call started`, `call ended`); the projector's call status uses them.
+- Wrong admin key, unknown or expired page codes and unknown paths all return the same not-found page (404). A bad Twilio signature returns 403.
+- `PAYMENT=sms`: `payEmail` gets `payUrl: null` and tells the payer to reply PAY.
+- `server.js` exports `wireApp()` (real modules) besides `createApp(deps)` (injected, for tests).
 
 ## File ownership (tonight)
 
