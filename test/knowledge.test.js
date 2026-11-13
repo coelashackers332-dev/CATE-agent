@@ -82,3 +82,16 @@ test('search: limit, empty knowledge base, unbuilt mode, missing folder', async 
   assert.throws(() => createKnowledge({ passages, mode: 'embeddings' }), /not built yet/);
   assert.deepEqual(loadPassages(new URL('./no-such-folder/', import.meta.url)), []);
 });
+
+test('the shipped knowledge/ folder: every passage loads, with a source, a date and a unique title', async () => {
+  const passages = loadPassages();
+  assert.ok(passages.length >= 1);
+  for (const p of passages) assert.ok(p.title && p.text && p.source && p.checked, p.title);
+  assert.equal(new Set(passages.map((p) => p.title)).size, passages.length);
+  // Every "## " heading in the folder became a passage: none was skipped for a missing Source or Checked line.
+  const { readdirSync, readFileSync } = await import('node:fs');
+  const dir = new URL('../knowledge/', import.meta.url);
+  const headings = readdirSync(dir).filter((f) => f.endsWith('.md'))
+    .flatMap((f) => readFileSync(new URL(f, dir), 'utf8').match(/^## .+$/gm) ?? []);
+  assert.equal(passages.length, headings.length);
+});
