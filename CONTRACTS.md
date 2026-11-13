@@ -43,6 +43,7 @@ One object per call, created by the server when a call starts and stored in `sto
   options: [],              // last find_flights result (with option ids)
   pageCode: null,           // set by text_options
   pendingHold: null,        // set by hold_booking's read-back step
+  assistance: null,         // set by set_assistance
   ref: null,                // set by hold_booking
   session: null,            // the model session (section 5)
 }
@@ -66,6 +67,24 @@ The 7 tools and their rules are in `STACK.md` §4. Rules live in code, not in th
 - `hold_booking` is two-step: first call `{ option_id }` returns `{ readback: "…", needs_confirmation: true }` and stores `call.pendingHold`; second call `{ option_id, caller_confirmed: true }` with the same option creates the hold. Name comes from the profile. Demo mode: first ref is `K7Q2XM` (`newRef()`).
 - `text_options` sends only to the verified member's number on file, only this call's options; creates the page (`store.pages.set(code, { member_id, options, ref: null, expires })`) and puts the link in text 1.
 - `send_pay_link` goes only to the delegate's email/phone on file. With `config.payment === 'sms'` it sends Daniel the pay email + an SMS "Reply PAY". It returns `{ ok: true, sent_to: "Daniel" }` at once; payment arrives later through `onPaid` (section 6).
+
+### Shapes shared by tools, screens and payment
+
+```js
+// segment
+{ flight: "CX0V1", from: "HKG", to: "YVR", city: "Vancouver", dep: "2027-02-19T11:40", arr: "2027-02-19T07:40", stops: [] }
+// option (find_flights result item; also stored on the trip page)
+{ id: "1", out: segment, back: segment, fare_hkd: 8420, note: "" | "via Tokyo, 4.5 hours longer" }
+// order (a hold made by hold_booking; same array as the seeded flown orders)
+{ ref: "K7Q2XM", member_id: "DEMO-0001", status: "held" | "paid" | "ended",
+  option_id: "1", out: segment, back: segment, fare_hkd: 8420,
+  cabin: "economy", seat: "window", meal: "vegetarian", ssr: ["WCHR"], payer: "Daniel Wong",
+  passenger: "WONG TAK MING" }
+```
+
+Golden-path expectation from the seed data (`DATA.md` §5): Vancouver, out after 2027-02-06, back before 2027-04-05, earliest departure 09:00 → 3 options: 11:40 HKD 8,420 · 23:50 HKD 7,960 · 09:10 via Tokyo HKD 6,900; return 31 Mar 13:30. The 06:30 flight is filtered as too early.
+
+`set_assistance` stores its result on the call as `call.assistance = { code: "WCHR" | "WCHS" | "WCHC" | null, summary }`; `hold_booking` copies the code into `order.ssr`.
 
 ## 4. Mock Cathay (`src/mock-cathay/routes.js`, `src/cathay.js`)
 

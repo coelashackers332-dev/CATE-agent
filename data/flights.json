@@ -2,7 +2,7 @@
   { "flight": "CX0V1", "from": "HKG", "to": "YVR", "dep": "2027-02-19T11:40", "arr": "2027-02-19T07:40", "stops": [], "aircraft": "359", "source": "placeholder" },
   { "flight": "CX0V3", "from": "HKG", "to": "YVR", "dep": "2027-02-19T23:50", "arr": "2027-02-19T19:50", "stops": [], "aircraft": "77W", "source": "placeholder" },
   { "flight": "CX0V5", "from": "HKG", "to": "YVR", "dep": "2027-02-19T06:30", "arr": "2027-02-19T02:30", "stops": [], "aircraft": "359", "source": "placeholder" },
-  { "flight": "CX0T1", "from": "HKG", "to": "YVR", "dep": "2027-02-19T08:10", "arr": "2027-02-19T08:40", "stops": ["NRT"], "aircraft": "321", "source": "placeholder" },
+  { "flight": "CX0T1", "from": "HKG", "to": "YVR", "dep": "2027-02-19T09:10", "arr": "2027-02-19T09:40", "stops": ["NRT"], "aircraft": "321", "source": "placeholder" },
   { "flight": "CX0V1", "from": "HKG", "to": "YVR", "dep": "2027-02-20T11:40", "arr": "2027-02-20T07:40", "stops": [], "aircraft": "359", "source": "placeholder" },
   { "flight": "CX0V2", "from": "YVR", "to": "HKG", "dep": "2027-03-31T13:30", "arr": "2027-04-01T18:30", "stops": [], "aircraft": "359", "source": "placeholder" },
   { "flight": "CX0V4", "from": "YVR", "to": "HKG", "dep": "2027-03-31T01:30", "arr": "2027-04-01T06:30", "stops": [], "aircraft": "77W", "source": "placeholder" }
