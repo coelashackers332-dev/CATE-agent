@@ -30,6 +30,8 @@ The voice model only listens, talks and chooses which tool to call. Every action
 - **Wheelchair codes** come from a fixed rule table, not from the model's judgement.
 - **Nothing about the member** reaches the model before verification passes, and the model never sees the correct verification answer.
 
+The 7 tools, with their inputs, results and rules, are documented in [`docs/TOOLS.md`](docs/TOOLS.md).
+
 ## Architecture
 
 ![CATE architecture: Twilio phone line → Amazon EC2 → Amazon Bedrock Nova Sonic](docs/architecture.png)
@@ -68,7 +70,7 @@ Caller's phone ──► Twilio (phone number, call audio 8 kHz μ-law, SMS)
 CONTRACTS.md          interfaces between modules (read before writing code)
 CLAUDE.md             working rules for this repo
 data/                 seed data for the mock Cathay systems (JSON)
-docs/                 architecture diagram
+docs/                 architecture diagram, TOOLS.md (the 7 tools)
 src/server.js         HTTP routes, projector feed, wiring
 src/twilio.js         call webhook, call audio stream, PAY reply
 src/mulaw.js          phone audio conversion (G.711 mu-law <-> PCM)

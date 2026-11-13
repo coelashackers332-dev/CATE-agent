@@ -308,7 +308,6 @@ export function createTools(deps) {
       if (!delegate) return fail('No family payer is on file for him. Say that a member of staff will call him about payment.');
       const first = delegate.name.split(' ')[0];
       const traveller = titleCase(call.order.passenger);
-      // ponytail: PAYMENT=sms has no checkout, so the email's button opens the view-only trip page.
       // PAYMENT=sms: no pay page exists, so the email tells him to reply PAY (payUrl null). With Stripe, payUrl becomes the checkout address.
       const mail = deps.emails.payEmail({ order: call.order, travellerName: traveller, payerName: delegate.name, payUrl: null });
       await deps.messages.sendEmail(delegate.email, mail.subject, mail.html, mail.text);
