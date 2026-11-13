@@ -12,6 +12,10 @@ Contracts between modules: `CONTRACTS.md`. Read it before writing code.
 - **The AI talks, our code decides** (`STACK.md` §1): names, flights, fares and wheelchair codes come from tools and data, never from the model.
 - **Demo path:** one rehearsed golden path on seeded data. Reset with `POST /reset`.
 
+## Team setup (internal)
+
+Setting up Claude Code for a teammate → follow `team/CLAUDE-SETUP.md`. `team/` also holds the 24-h timeline PDF. It's internal and is deleted before `git tag submission`.
+
 ## Commands
 
 - `npm start`: run the server (`node src/server.js`)
