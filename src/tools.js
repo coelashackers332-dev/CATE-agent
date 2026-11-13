@@ -1,4 +1,4 @@
-// The 7 tools the voice model can call (CONTRACTS.md §3). The model talks; every rule is enforced here.
+// The 8 tools the voice model can call (CONTRACTS.md §3). The model talks; every rule is enforced here.
 //
 // createTools(deps) → { specs, runTool }
 //   deps.cathay   : either a FACTORY (callId) => adapter, e.g. (callId) => createCathay({ callId }), so the projector
@@ -7,6 +7,8 @@
 //   deps.texts    : { optionsSms(options, link), payRequestSms(order, travellerName) }
 //   deps.emails   : { payEmail({ order, travellerName, payerName, payUrl }) }
 //   deps.baseUrl  : public address used in trip-page links (default config.baseUrl)
+//   deps.knowledge: { search(question, limit) → Promise<[{ title, text, source, checked }]> }, [] when nothing is relevant.
+//                   Optional: without it ask_cathay always answers "I do not have that information".
 //
 // Besides the fields in CONTRACTS §2, tools keep on the call object (server side, never sent to the model as such):
 //   call.profile (model-safe profile + recent trips), call.order (the hold), call.verifyFails, call.payRequested.
@@ -16,6 +18,7 @@ import { store, newPageCode } from './store.js';
 import { fmtDay } from './screens/trip.js';
 
 const MAX_VERIFY_TRIES = 3;
+const MAX_PASSAGES = 3;   // how many knowledge passages ask_cathay hands the model
 
 // ---- Cities we fly in the seed data. Anything else gets "no flights", never a guess.
 const CITIES = { HKG: 'Hong Kong', YVR: 'Vancouver', KIX: 'Osaka', NRT: 'Tokyo' };
@@ -127,6 +130,18 @@ const specs = [
     description: 'Call after the booking is held, to send the pay request to the family member on his membership. It takes no input. '
       + 'Tell him who it went to. You will be told when the payment arrives.',
     inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'ask_cathay',
+    description: 'Call when he asks a general question about flying with Cathay that is not about this booking: baggage, check-in times, '
+      + 'wheelchair help at the airport, mobility aids, medical equipment, changing a ticket. Pass his question in his own words. '
+      + 'Answer only from the passages returned, in one or two short sentences, and say it is from the Cathay website. '
+      + 'If found is false, say you do not have that information and offer a member of staff. Never use this for flights, prices or his booking.',
+    inputSchema: {
+      type: 'object',
+      properties: { question: { type: 'string', description: 'His question in his own words, e.g. "Can I bring my own wheelchair?"' } },
+      required: ['question'],
+    },
   },
 ];
 
@@ -318,6 +333,24 @@ export function createTools(deps) {
       }
       call.payRequested = first;
       return { ok: true, sent_to: first };
+    },
+
+    // Rule: general Cathay knowledge comes only from our checked passages (RAG). The model may shorten them for speech,
+    // but with no passage it gets nothing to build an answer from, and is told to say so.
+    async ask_cathay({ question }, _call) {
+      const asked = String(question ?? '').trim();
+      if (!asked) return fail('Ask him what he would like to know.');
+      // deps.knowledge.search returns only passages that are relevant enough; [] means "we do not know".
+      const hits = (await deps.knowledge?.search(asked, MAX_PASSAGES)) ?? [];
+      if (!hits.length) {
+        return { ok: true, found: false, say: 'Say you do not have that information, and that a member of staff can help. Do not guess.' };
+      }
+      return {
+        ok: true, found: true,
+        passages: hits.slice(0, MAX_PASSAGES).map(({ title, text, source, checked }) => ({ title, text, source, checked })),
+        say: 'Answer only from these passages, in one or two short sentences, and say it is from the Cathay website. '
+          + 'If they do not answer his question, say you do not have that information.',
+      };
     },
   };
 

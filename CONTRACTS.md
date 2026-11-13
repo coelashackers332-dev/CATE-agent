@@ -158,6 +158,7 @@ export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref
 - The server emits `system` events from "Phone" (`call started`, `call ended`); the projector's call status uses them.
 - Wrong admin key, unknown or expired page codes and unknown paths all return the same not-found page (404). A bad Twilio signature returns 403.
 - `PAYMENT=sms`: `payEmail` gets `payUrl: null` and tells the payer to reply PAY.
+- Eighth tool `ask_cathay({ question })` for general Cathay questions (RAG, `onday/RAG-PLAN.md` in the planning folder). It reads `deps.knowledge.search(question, limit) → Promise<[{ title, text, source, checked }]>`, which returns `[]` when nothing is relevant enough. The search module is not built yet, so in the running app the tool answers "I do not have that information".
 - `server.js` exports `wireApp()` (real modules) besides `createApp(deps)` (injected, for tests).
 
 ## File ownership (tonight)

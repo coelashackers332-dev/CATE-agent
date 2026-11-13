@@ -45,18 +45,23 @@ beforeEach(() => {
     emails: {
       payEmail: ({ order, travellerName, payerName, payUrl }) => ({ subject: `Pay ${order.ref}`, html: `<p>${payerName}</p>`, text: `${travellerName} ${payUrl}` }),
     },
+    knowledge: { search: async (question, limit) => knowledge(question).slice(0, limit) },
     baseUrl: BASE_URL,
   });
   call = newCall();
 });
 afterEach(() => bus.off('event', record));
 
+// Stub knowledge search: 4 baggage passages for a baggage question, nothing for anything else.
+const PASSAGE = { title: 'Checked baggage', text: 'Economy includes one checked bag.', source: 'https://www.cathaypacific.com/baggage', checked: '2026-11-13', score: 0.9 };
+const knowledge = (question) => (/bag/i.test(question) ? [PASSAGE, PASSAGE, PASSAGE, PASSAGE] : []);
+
 const run = (name, args) => tools.runTool(name, args, call);
 const VANCOUVER = { to: 'Vancouver', after: '2027-02-06', before: '2027-04-05' };
 const verify = () => run('verify_caller', { answer: 'Osaka, last May' });
 
-test('specs: the 7 tools, each with a description and a JSON Schema', () => {
-  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'set_assistance', 'hold_booking', 'send_pay_link']);
+test('specs: the 8 tools, each with a description and a JSON Schema', () => {
+  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'set_assistance', 'hold_booking', 'send_pay_link', 'ask_cathay']);
   for (const s of tools.specs) {
     assert.ok(s.description.length > 40, s.name);
     assert.equal(s.inputSchema.type, 'object');
@@ -301,4 +306,27 @@ test('runTool never throws: an unknown tool or a broken system comes back in pla
   assert.equal(result.ok, false);
   assert.ok(!result.error.includes('carrier'), 'internal errors are not read to the caller');
   assert.equal(events.at(-1).kind, 'tool_result');
+});
+
+test('ask_cathay: answers only from passages, says so when there are none, and needs verification', async () => {
+  const early = await run('ask_cathay', { question: 'How many bags can I bring?' });
+  assert.equal(early.ok, false);                       // not verified yet
+  assert.equal(early.passages, undefined);
+
+  await verify();
+  const hit = await run('ask_cathay', { question: 'How many bags can I bring?' });
+  assert.equal(hit.found, true);
+  assert.equal(hit.passages.length, 3);                // at most 3, even if the search returns more
+  assert.deepEqual(hit.passages[0], { title: PASSAGE.title, text: PASSAGE.text, source: PASSAGE.source, checked: PASSAGE.checked });
+  assert.match(hit.say, /only from these passages/);
+
+  const miss = await run('ask_cathay', { question: 'Do I need a visa for Canada?' });
+  assert.deepEqual([miss.ok, miss.found, miss.passages], [true, false, undefined]);
+  assert.match(miss.say, /do not have that information/);
+
+  assert.equal((await run('ask_cathay', { question: '  ' })).ok, false);
+
+  // With no knowledge base wired in, the tool still answers safely.
+  const bare = createTools({ cathay: (callId) => createCathay({ base, callId }), baseUrl: BASE_URL });
+  assert.equal((await bare.runTool('ask_cathay', { question: 'bags?' }, call)).found, false);
 });
