@@ -58,6 +58,8 @@ const titleCase = (name) => name.toLowerCase().replace(/\b[a-z]/g, (c) => c.toUp
 /** Flight time by the local clocks. Only used to compare flights on the same route, where the time zones cancel out. */
 const clockHours = (f) => (Date.parse(`${f.arr}Z`) - Date.parse(`${f.dep}Z`)) / 36e5;
 const nonstopFirst = (a, b) => a.stops.length - b.stops.length;
+/** "https://www.cathaypacific.com/baggage.html?x=1" → "cathaypacific.com/baggage.html": short enough for one projector line. */
+const shortSource = (source) => String(source).replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/$/, '');
 const segment = (f) => ({ flight: f.flight, from: f.from, to: f.to, city: cityOf(f.to), dep: f.dep, arr: f.arr, stops: f.stops });
 
 const specs = [
@@ -307,6 +309,7 @@ export function createTools(deps) {
       });
       call.ref = order.ref;
       call.order = order;
+      emit(call.id, 'state', { ref: order.ref, status: 'held' });   // the projector's booking status
       call.pendingHold = null;
       tripPage(call);   // the trip page now belongs to this booking (and exists even if no text was sent)
       return {
@@ -337,17 +340,24 @@ export function createTools(deps) {
 
     // Rule: general Cathay knowledge comes only from our checked passages (RAG). The model may shorten them for speech,
     // but with no passage it gets nothing to build an answer from, and is told to say so.
-    async ask_cathay({ question }, _call) {
+    async ask_cathay({ question }, call) {
       const asked = String(question ?? '').trim();
       if (!asked) return fail('Ask him what he would like to know.');
       // deps.knowledge.search returns only passages that are relevant enough; [] means "we do not know".
-      const hits = (await deps.knowledge?.search(asked, MAX_PASSAGES)) ?? [];
+      const hits = ((await deps.knowledge?.search(asked, MAX_PASSAGES)) ?? []).slice(0, MAX_PASSAGES);
       if (!hits.length) {
+        emit(call.id, 'screen', { what: 'knowledge', summary: 'No checked answer on this. CATE offers a member of staff.' });
         return { ok: true, found: false, say: 'Say you do not have that information, and that a member of staff can help. Do not guess.' };
       }
+      // The projector shows where the answer comes from: the best passage, its page and the date it was checked.
+      const [best] = hits;
+      emit(call.id, 'screen', {
+        what: 'knowledge',
+        summary: `Source: ${best.title} · ${shortSource(best.source)} · checked ${best.checked}${hits.length > 1 ? ` (+${hits.length - 1} more)` : ''}`,
+      });
       return {
         ok: true, found: true,
-        passages: hits.slice(0, MAX_PASSAGES).map(({ title, text, source, checked }) => ({ title, text, source, checked })),
+        passages: hits.map(({ title, text, source, checked }) => ({ title, text, source, checked })),
         say: 'Answer only from these passages, in one or two short sentences, and say it is from the Cathay website. '
           + 'If they do not answer his question, say you do not have that information.',
       };

@@ -24,7 +24,7 @@ Design docs (read-only, in the planning folder `D:\CATHAY HACKATHON\`): `onday/S
 | `tool_call` | `name`, `args` | `runTool` |
 | `tool_result` | `name`, `result` (what the model sees) | `runTool` |
 | `system` | `system` ("Membership" \| "Orders" \| "Schedule" \| "Messages" \| "Payment" \| "Phone" \| "Demo"), `action`, `ok`, `summary` | `cathay.js`, messages, payment, reset |
-| `screen` | `what` ("options_page" \| "pay_email" \| "sms"), `summary` | tools |
+| `screen` | `what` ("options_page" \| "pay_email" \| "sms" \| "knowledge"), `summary` | tools |
 | `state` | `ref`, `status` | `setOrderStatus` |
 
 `summary` is one short line for the projector, e.g. `"✓ member found (DEMO-0001)"`. Events never carry phone numbers or email addresses.

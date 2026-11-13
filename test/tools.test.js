@@ -319,10 +319,14 @@ test('ask_cathay: answers only from passages, says so when there are none, and n
   assert.equal(hit.passages.length, 3);                // at most 3, even if the search returns more
   assert.deepEqual(hit.passages[0], { title: PASSAGE.title, text: PASSAGE.text, source: PASSAGE.source, checked: PASSAGE.checked });
   assert.match(hit.say, /only from these passages/);
+  // The projector gets the source of the answer: title, page without "https://www.", date checked.
+  const shown = () => events.filter((e) => e.kind === 'screen' && e.what === 'knowledge').at(-1).summary;
+  assert.equal(shown(), 'Source: Checked baggage · cathaypacific.com/baggage · checked 2026-11-13 (+2 more)');
 
   const miss = await run('ask_cathay', { question: 'Do I need a visa for Canada?' });
   assert.deepEqual([miss.ok, miss.found, miss.passages], [true, false, undefined]);
   assert.match(miss.say, /do not have that information/);
+  assert.match(shown(), /^No checked answer/);
 
   assert.equal((await run('ask_cathay', { question: '  ' })).ok, false);
 
