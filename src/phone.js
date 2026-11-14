@@ -1,4 +1,5 @@
-// The phone line: the local audio socket that Max's Bluetooth bridge connects to (WS /local/stream, CONTRACTS.md §7).
+// The phone line: the local audio socket that the laptop bridge (screens/bridge.html, GET /bridge) connects to
+// (WS /local/stream, CONTRACTS.md §7).
 // Also owns the life of a call: create the call context, start the model session, end both.
 // Audio is PCM16 little-endian, 8 kHz mono, both ways, as binary WebSocket frames: no codec, no conversion.
 import { emit } from './events.js';

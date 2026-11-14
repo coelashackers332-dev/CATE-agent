@@ -30,6 +30,7 @@ const deps = {
   renderTripPage: ({ page, order, profile }) => `TRIP ${profile.member_id} ${order?.status ?? 'options'} ${page.options.length}`,
   notFoundPage: () => '<h1>Not found</h1>',
   projectorHtml: '<html>projector</html>',
+  bridgeHtml: '<html>bridge</html>',
   handleMockCathay: (req, res) => { res.end('mock cathay'); return true; },
   messages,
   payment: { onPaid: (...a) => { paidCalls.push(a); return realPayment.onPaid(...a); } },
@@ -83,7 +84,7 @@ const holdOrder = (ref = 'K7Q2XM') => {
 test('/, unknown paths and refused admin routes give the same 404', async () => {
   const replies = await Promise.all([
     get('/'), get('/nope'), get('/v/'), get('/local/stream'), post('/dev/pay', { 'x-admin-key': 'wrong' }),
-    get('/projector'), get('/projector?key=wrong'), post('/reset'), post('/reset', { 'x-admin-key': 'wrong' }),
+    get('/projector'), get('/projector?key=wrong'), get('/bridge'), get('/bridge?key=wrong'), post('/reset'), post('/reset', { 'x-admin-key': 'wrong' }),
     post('/dev/simulate', { 'x-admin-key': 'wrong' }), get('/events?key=test-admin'),
   ]);
   for (const r of replies) {
@@ -108,6 +109,15 @@ test('/projector and /reset work with the admin key', async () => {
   assert.deepEqual(await done.json(), { ok: true });
   assert.equal(findOrder('K7Q2XM'), null);
   assert.equal(store.activeCall, null);
+});
+
+test('/bridge: the bridge page, on this machine with the admin key only', async () => {
+  const page = await get('/bridge?key=test-admin');
+  assert.equal(page.status, 200);
+  assert.equal(await page.text(), '<html>bridge</html>');
+  // Through a tunnel or proxy (X-Forwarded-For) even the right key is refused.
+  const proxied = await get('/bridge?key=test-admin', { 'X-Forwarded-For': '203.0.113.7' });
+  assert.equal(proxied.status, 404);
 });
 
 test('local line: only this machine with the admin key may connect', async () => {

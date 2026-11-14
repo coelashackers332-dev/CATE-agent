@@ -31,11 +31,11 @@ export function isLocal(req) {
 
 /**
  * @param {object} deps  { tools: { specs, runTool }, startSession, renderTripPage, notFoundPage,
- *                         projectorHtml, handleMockCathay, messages, payment }
+ *                         projectorHtml, bridgeHtml, handleMockCathay, messages, payment }
  * @returns {import('node:http').Server}
  */
 export function createApp(deps) {
-  const { tools, startSession, renderTripPage, notFoundPage, projectorHtml, handleMockCathay, payment } = deps;
+  const { tools, startSession, renderTripPage, notFoundPage, projectorHtml, bridgeHtml, handleMockCathay, payment } = deps;
   const phoneLine = createPhone({ tools, startSession });
   const notFound = (res) => html(res, 404, notFoundPage());
 
@@ -65,6 +65,8 @@ export function createApp(deps) {
     if (req.method === 'GET' && path.startsWith('/v/')) return tripPage(path.slice(3), res);
     if (path.startsWith('/pay/')) return payment.payRoute(req, res, path.slice(5), () => notFound(res));
     if (is('GET', '/projector') && isAdmin(new URLSearchParams(query).get('key'))) return html(res, 200, projectorHtml);
+    // The bridge page for the laptop phone line. The line has no caller ID, so it answers on this machine only, never through the tunnel.
+    if (is('GET', '/bridge') && isLocal(req) && isAdmin(new URLSearchParams(query).get('key'))) return html(res, 200, bridgeHtml);
     if (is('POST', '/reset') && isAdmin(req.headers['x-admin-key'])) {
       phoneLine.endCall();
       store.reset();
@@ -96,7 +98,7 @@ export function createApp(deps) {
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
     const [path, query] = req.url.split('?');
-    // The Bluetooth bridge runs on this laptop: local only, plus the admin key.
+    // The audio bridge (the /bridge page) runs on this laptop: local only, plus the admin key.
     if (path === '/local/stream' && isLocal(req) && isAdmin(new URLSearchParams(query).get('key'))) {
       return wss.handleUpgrade(req, socket, head, phoneLine.local);
     }
@@ -131,6 +133,7 @@ export async function wireApp() {
   const app = createApp({
     tools, startSession: model.startSession, renderTripPage: trip.renderTripPage, notFoundPage: trip.notFoundPage,
     projectorHtml: readFileSync(new URL('./screens/projector.html', import.meta.url), 'utf8'),
+    bridgeHtml: readFileSync(new URL('./screens/bridge.html', import.meta.url), 'utf8'),
     handleMockCathay, messages, payment,
   });
   return app;

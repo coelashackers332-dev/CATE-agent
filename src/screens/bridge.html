@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CATE phone bridge</title>
+<style>
+  :root { --bg: #f6f7f7; --fg: #1b2424; --muted: #5b6a6a; --line: #d5dbdb; --accent: #006564; --bad: #a3262b; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #121818; --fg: #e8eeee; --muted: #9aa8a8; --line: #2c3838; --accent: #3fb6b2; --bad: #ef7a7f; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 18px/1.5 system-ui, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.hint { color: var(--muted); margin: 0 0 24px; font-size: 15px; }
+  label { display: block; font-size: 15px; color: var(--muted); margin: 16px 0 4px; }
+  select, button { font: inherit; width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); }
+  .row { display: flex; gap: 12px; margin-top: 24px; }
+  button { cursor: pointer; font-weight: 600; }
+  #start { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #end { border-color: var(--bad); color: var(--bad); }
+  button:disabled { opacity: .4; cursor: default; }
+  #status { margin-top: 24px; font-weight: 600; min-height: 1.5em; }
+  meter { width: 100%; height: 16px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>CATE phone bridge</h1>
+  <p class="hint">Answer the call in Phone Link first, then press Start. Laptop only. Use Chrome.</p>
+
+  <label for="in">Call audio in (Phone Link output, e.g. CABLE Output)</label>
+  <select id="in"></select>
+  <label for="out">CATE's voice out (Phone Link mic, e.g. Hi-Fi Cable Input)</label>
+  <select id="out"></select>
+
+  <div class="row">
+    <button id="start">Start call</button>
+    <button id="end" disabled>End call</button>
+  </div>
+  <div id="status">Not on a call</div>
+  <meter id="level" min="0" max="1" value="0" aria-label="Caller audio level"></meter>
+</main>
+
+<script>
+// 8 kHz 16-bit PCM in 20 ms frames, the audio the phone line takes and gives (WS /local/stream, CONTRACTS.md §7).
+const FRAME = 160;
+const WORKLET = `
+class Capture extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(${FRAME}); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0][0];
+    if (ch) for (const s of ch) {
+      this.buf[this.n++] = Math.max(-1, Math.min(1, s)) * 32767;
+      if (this.n === ${FRAME}) { this.port.postMessage(this.buf.slice()); this.n = 0; }
+    }
+    return true;
+  }
+}
+class Playback extends AudioWorkletProcessor {
+  constructor() {
+    super(); this.q = []; this.cur = null; this.i = 0;
+    this.port.onmessage = (e) => { if (e.data === 'clear') { this.q.length = 0; this.cur = null; } else this.q.push(e.data); };
+  }
+  process(inputs, outputs) {
+    const out = outputs[0][0];
+    for (let k = 0; k < out.length; k++) {
+      if (!this.cur || this.i >= this.cur.length) { this.cur = this.q.shift() ?? null; this.i = 0; }
+      out[k] = this.cur ? this.cur[this.i++] / 32768 : 0;
+    }
+    return true;
+  }
+}
+registerProcessor('capture', Capture);
+registerProcessor('playback', Playback);`;
+
+const $ = (id) => document.getElementById(id);
+const key = new URLSearchParams(location.search).get('key') ?? '';
+const status = (text) => { $('status').textContent = text; };
+let ctx = null, stream = null, ws = null;
+
+function remember(sel, name) {
+  let saved = null;
+  try { saved = localStorage.getItem(name); } catch {}
+  if (saved && [...sel.options].some((o) => o.value === saved)) sel.value = saved;
+  sel.onchange = () => { try { localStorage.setItem(name, sel.value); } catch {} };
+}
+
+async function listDevices() {
+  // Device names are hidden until the page has microphone permission once.
+  try { (await navigator.mediaDevices.getUserMedia({ audio: true })).getTracks().forEach((t) => t.stop()); } catch {}
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  for (const [id, kind] of [['in', 'audioinput'], ['out', 'audiooutput']]) {
+    $(id).replaceChildren(...devices.filter((d) => d.kind === kind).map((d) => new Option(d.label || d.deviceId, d.deviceId)));
+    remember($(id), `cate.bridge.${id}`);
+  }
+}
+
+function stop(text) {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  stream?.getTracks().forEach((t) => t.stop());
+  ctx?.close();
+  ctx = stream = null;
+  $('start').disabled = false;
+  $('end').disabled = true;
+  $('level').value = 0;
+  status(text);
+}
+
+async function start() {
+  $('start').disabled = true;
+  status('Starting…');
+  try {
+    ctx = new AudioContext({ sampleRate: 8000, latencyHint: 'interactive' });
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' })));
+    if ($('out').value) await ctx.setSinkId($('out').value);
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      deviceId: { exact: $('in').value }, channelCount: 1,
+      // The cables carry clean digital audio; browser processing would clip the start of words.
+      echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+    } });
+    const capture = new AudioWorkletNode(ctx, 'capture');
+    const playback = new AudioWorkletNode(ctx, 'playback', { outputChannelCount: [1] });
+    const mute = ctx.createGain();
+    mute.gain.value = 0;   // keeps the capture node running without playing the caller back to them
+    ctx.createMediaStreamSource(stream).connect(capture).connect(mute).connect(ctx.destination);
+    playback.connect(ctx.destination);
+
+    ws = new WebSocket(`ws://${location.host}/local/stream?key=${encodeURIComponent(key)}`);
+    ws.binaryType = 'arraybuffer';
+    // The line starts a call on {"event":"start"}, not on the connection itself (src/phone.js).
+    ws.onopen = () => { ws.send('{"event":"start"}'); status('On the call: CATE is listening'); $('end').disabled = false; };
+    ws.onclose = () => stop('Call ended. Hang up in Phone Link if the caller has not.');
+    ws.onmessage = (e) => {
+      if (e.data instanceof ArrayBuffer) return playback.port.postMessage(new Int16Array(e.data));
+      const msg = JSON.parse(e.data);
+      if (msg.event === 'clear') playback.port.postMessage('clear');
+      if (msg.event === 'busy') stop('CATE is already on a call. Reset first (POST /reset).');
+    };
+    capture.port.onmessage = (e) => {
+      const pcm = e.data;
+      let sum = 0;
+      for (const s of pcm) sum += s * s;
+      $('level').value = Math.min(1, Math.sqrt(sum / pcm.length) / 8000);
+      if (ws?.readyState === WebSocket.OPEN) ws.send(pcm.buffer);
+    };
+  } catch (err) {
+    stop(`Could not start: ${err.message}`);
+  }
+}
+
+$('start').onclick = start;
+$('end').onclick = () => stop('Call ended. Hang up in Phone Link.');
+listDevices().catch((err) => status(`Could not list audio devices: ${err.message}`));
+</script>
+</body>
+</html>
