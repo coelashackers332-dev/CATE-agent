@@ -55,7 +55,9 @@ export function createApp(deps) {
     const page = store.pages.get(code);
     if (!page || (page.expires != null && Date.now() > new Date(page.expires).getTime())) return notFound(res);
     const order = page.ref ? findOrder(page.ref) : null;
-    html(res, 200, renderTripPage({ page, order, profile: findMember(page.member_id), now: Date.now() }));
+    // PAYMENT=page: a traveller who pays himself gets a Pay button to the demo pay page while his booking is held.
+    const payUrl = config.payment === 'page' ? `/pay/${code}` : null;
+    html(res, 200, renderTripPage({ page, order, profile: findMember(page.member_id), now: Date.now(), payUrl }));
   }
 
   async function route(req, res) {

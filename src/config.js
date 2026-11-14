@@ -17,7 +17,7 @@ export const config = {
   danielPhone: env('DANIEL_PHONE'),
   danielEmail: env('DANIEL_EMAIL'),
   messages: env('MESSAGES', 'log'),   // log | live
-  payment: env('PAYMENT', 'sms'),     // sms | stripe
+  payment: env('PAYMENT', 'sms'),     // sms | page (demo pay page, /pay/<code>) | stripe
   model: env('MODEL', 'scripted'),    // scripted | nova
   knowledge: env('KNOWLEDGE', 'keyword'),   // keyword | embeddings (not built yet)
 };
