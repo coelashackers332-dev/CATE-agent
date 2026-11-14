@@ -5,6 +5,10 @@ import assert from 'node:assert/strict';
 
 process.env.SCRIPT_STEP_MS = '0';
 const { config } = await import('../src/config.js');
+// Fixed test settings, whatever a local .env says: nothing is really sent, the scripted model plays the call,
+// and the unsigned PAY below is accepted (with a Twilio token set, only signed requests are).
+Object.assign(config, { messages: 'log', payment: 'sms', model: 'scripted' });
+config.twilio.authToken = '';
 const { store, findOrder } = await import('../src/store.js');
 const { bus } = await import('../src/events.js');
 const { wireApp } = await import('../src/server.js');
