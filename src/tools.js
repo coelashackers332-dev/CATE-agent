@@ -82,7 +82,7 @@ const specs = [
   {
     name: 'find_flights',
     description: 'Call when you know the destination city and the dates. Returns at most 3 options from the Cathay schedule, already matched to his profile. '
-      + 'Read out read_out and return_flight slowly, one option at a time. Never say a flight, time or price that is not in the result.',
+      + 'Read out read_out and return_flight slowly, one option at a time, and say left_out if it is there. Never say a flight, time or price that is not in the result.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -101,9 +101,29 @@ const specs = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'choose_option',
+    description: 'Call as soon as he says which flight option he wants. Records his choice. The result gives you a sentence to say back to him and the next question to ask. '
+      + 'Never call it with an option he has not chosen.',
+    inputSchema: {
+      type: 'object',
+      properties: { option_id: { type: 'string', description: 'The id of the option he chose, from find_flights' } },
+      required: ['option_id'],
+    },
+  },
+  {
+    name: 'set_preferences',
+    description: 'Call as soon as he answers the question about the seat and meal on his membership. Records his answer. '
+      + 'The result gives you a sentence to say back to him and the next question to ask.',
+    inputSchema: {
+      type: 'object',
+      properties: { keep: { type: 'boolean', description: 'True if the seat and meal on his membership are still right; false if he wants something else' } },
+      required: ['keep'],
+    },
+  },
+  {
     name: 'set_assistance',
     description: 'Call to set wheelchair help before holding the booking. If a recent trip has assistance on file, ask "Same as last time?" and on yes pass same_as_last_trip true. '
-      + 'Otherwise ask the three questions in order and pass his answers; stop at the first "no". Read the summary back in plain words. Never say the code.',
+      + 'Otherwise ask the three questions in order and pass his answers; stop at the first "no". Never say the code. The result gives you a sentence to say back to him and the next question to ask.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -115,21 +135,32 @@ const specs = [
     },
   },
   {
+    name: 'set_payer',
+    description: 'Call as soon as he says who pays: self (the pay request comes to his own phone) or family (the family payer on his membership). Records his answer. '
+      + 'Never call it before he has answered that question.',
+    inputSchema: {
+      type: 'object',
+      properties: { payer: { type: 'string', enum: ['self', 'family'], description: 'Who pays, as he said' } },
+      required: ['payer'],
+    },
+  },
+  {
     name: 'hold_booking',
-    description: 'Call with option_id once he has chosen an option and wheelchair help is set. The first call returns a readback: say it to him word for word and ask if it is right. '
-      + 'Only after he says yes, call again with the same option_id and caller_confirmed true. Then tell him the booking reference, letter by letter.',
+    description: 'Call for the read-back once his option, seat and meal, wheelchair help and payer are all recorded; if one is missing it tells you what to ask. '
+      + 'The first call returns a readback: say it to him word for word and wait. '
+      + 'Only after he clearly says yes to that question, call again with caller_confirmed true; a reply about anything else is not a yes. Then tell him the booking reference, letter by letter.',
     inputSchema: {
       type: 'object',
       properties: {
-        option_id: { type: 'string', description: 'The id of the option he chose, from find_flights' },
-        caller_confirmed: { type: 'boolean', description: 'True only after he said yes to the readback' },
+        caller_confirmed: { type: 'boolean', description: 'True only if his last words were a clear yes to the readback question' },
+        option_id: { type: 'string', description: 'Only if he changes his option now: the id of the new option' },
       },
-      required: ['option_id'],
     },
   },
   {
     name: 'send_pay_link',
-    description: 'Call after the booking is held, to send the pay request to the family member on his membership. It takes no input. '
+    description: 'Call after the booking is held, and only after he says yes to sending the pay request now. It goes to the payer he chose at the read-back, '
+      + 'himself or his family payer, and to nobody else. It takes no input. '
       + 'Tell him who it went to. You will be told when the payment arrives.',
     inputSchema: { type: 'object', properties: {} },
   },
@@ -175,15 +206,45 @@ export function createTools(deps) {
     const { out, back } = option;
     const wishes = [profile.prefs?.seat && `${profile.prefs.seat} seat`, profile.prefs?.meal && `${profile.prefs.meal} meal`].filter(Boolean).join(', ');
     return [
-      `Booking for ${titleCase(profile.name)}.`,
+      // The opening line is part of the read-back, so it is said once, at the right moment.
+      `Let me read it all back to you. Nothing is booked until you say yes. Booking for ${titleCase(profile.name)}.`,
       `${cityOf(out.from)} to ${out.city}, flight ${out.flight}, ${fmtDay(out.dep)}, leaving at ${spokenTime(out.dep)}${option.note ? `, ${option.note}` : ''}.`,
       `Coming back on flight ${back.flight}, ${fmtDay(back.dep)}, leaving at ${spokenTime(back.dep)}.`,
       wishes && `${wishes[0].toUpperCase()}${wishes.slice(1)}.`,
       assistance.summary,
       `The total is ${spokenMoney(option.fare_hkd)} for the return trip.`,
-      payer && `${payer} will be asked to pay.`,
+      payer ? `${payer} will be asked to pay.` : 'The pay request will come to your own phone.',
       'Shall I hold this booking?',
     ].filter(Boolean).join(' ');
+  }
+
+  const ORDINAL = ['first', 'second', 'third'];
+  const wishesOf = (profile) => [profile.prefs?.seat && `a ${profile.prefs.seat} seat`, profile.prefs?.meal && `a ${profile.prefs.meal} meal`].filter(Boolean).join(' and ');
+
+  /** What to ask next before the read-back, one question at a time, with the caller's own data in it. null = everything is recorded. */
+  async function nextStep(call, cathay) {
+    const profile = await profileOf(call, cathay);
+    if (!call.choice) return 'Ask which option he would like, then call choose_option.';
+    if (!call.prefs && wishesOf(profile)) return `Ask: "Your membership has ${wishesOf(profile)}. Is that still right?" Then call set_preferences with his answer.`;
+    if (!call.assistance) {
+      const last = profile.recent_trips.find((t) => t.status === 'flown' && wheelchairCode(t.ssr));
+      return last
+        ? `Ask: "On your ${last.to} trip we arranged this: ${last.assistance} Would you like the same help again?" On a yes call set_assistance with same_as_last_trip true; otherwise ask its three wheelchair questions, one at a time.`
+        : 'Ask the three wheelchair questions of set_assistance, one at a time, then call it.';
+    }
+    if (!call.payer) {
+      const delegate = profile.has_delegate ? await cathay.getDelegate(call.token) : null;
+      if (!delegate) call.payer = 'self';   // nobody else can pay, so there is nothing to ask
+      else return `Ask: "Would you like to pay yourself, or shall I ask ${delegate.name.split(' ')[0]} to pay?" Then call set_payer with his answer.`;
+    }
+    return null;
+  }
+
+  /** An answer was recorded: the model says `confirm` back at once, then asks the one next thing. Any earlier read-back is out of date. */
+  async function recorded(call, cathay, confirm, extra = {}) {
+    call.pendingHold = null;
+    const then = (await nextStep(call, cathay)) ?? 'Call hold_booking now for the read-back.';
+    return { ok: true, ...extra, confirm, next: `Say: "${confirm}" Then: ${then} Never record an answer he has not given.` };
   }
 
   const handlers = {
@@ -214,8 +275,15 @@ export function createTools(deps) {
       const to = codeOf(args.to);
       const from = codeOf(args.from ?? 'HKG');
       if (!to || !from || to === from) return fail(`We have no flights for "${args.to}" here. Do not suggest any flight. Ask him which city again.`);
+      // "What dates do you have?": the days we fly this route, from the schedule, so the model has something true to offer.
+      const daysWeFly = async () => {
+        const all = await cathay.searchFlights({ from, to, after: '2000-01-01', before: '2100-01-01' });
+        const days = (flights) => [...new Set(flights.map((f) => fmtDay(f.dep)))].join(', ');
+        const out = days(all.out.filter((f) => f.return_fare_hkd != null));
+        return out && all.back.length ? ` We fly to ${cityOf(to)} on ${out}, and back on ${days(all.back)}: tell him those days and ask if they would work.` : '';
+      };
       if (!isDate(args.after) || !isDate(args.before) || args.before <= args.after) {
-        return fail('Two dates are needed as YYYY-MM-DD: leave after, and be back before. Ask him for the dates.');
+        return fail(`Two dates are needed as YYYY-MM-DD: leave after, and be back before. Ask him for the dates.${await daysWeFly()}`);
       }
       const { prefs } = await profileOf(call, cathay);
       const found = await cathay.searchFlights({ from, to, after: args.after, before: args.before });
@@ -233,7 +301,7 @@ export function createTools(deps) {
         .filter((f) => back && f.arr < back.dep)
         .sort((a, b) => nonstopFirst(a, b) || a.dep.localeCompare(b.dep))
         .slice(0, 3);
-      if (!outs.length) return fail('No flights fit those dates. Do not suggest any flight. Ask if other dates would work.');
+      if (!outs.length) return fail(`No flights fit those dates. Do not suggest any flight that is not named here.${(await daysWeFly()) || ' Ask if other dates would work.'}`);
 
       const fastest = Math.min(...outs.map(clockHours));
       const noteFor = (f) => {
@@ -243,15 +311,21 @@ export function createTools(deps) {
       };
       const options = outs.map((f, i) => ({ id: String(i + 1), out: segment(f), back: segment(back), fare_hkd: f.return_fare_hkd, note: noteFor(f) }));
       call.options = options;
+      call.choice = null;
       call.pendingHold = null;
 
       const tooEarly = priced.length - fits.length;
       return {
         ok: true,
         options,
-        read_out: options.map((o) => `Option ${o.id}: ${fmtDay(o.out.dep)}, leaving at ${spokenTime(o.out.dep)}, ${o.note || 'direct'}, ${spokenMoney(o.fare_hkd)} return.`),
+        // Spoken sentences, not a list: "Option 1: …, direct, …" sounded like a form being read out.
+        read_out: options.map((o, i) => `The ${['first', 'second', 'third'][i]} option leaves on ${fmtDay(o.out.dep)} at ${spokenTime(o.out.dep)}. `
+          + `It ${o.note ? `goes ${o.note}` : 'is direct'}, and costs ${spokenMoney(o.fare_hkd)} return.`),
         return_flight: `Every option comes back on ${fmtDay(back.dep)}, leaving at ${spokenTime(back.dep)}.`,
-        ...(tooEarly > 0 && { left_out: `${tooEarly} flight${tooEarly === 1 ? '' : 's'} leaving before ${earliest} left out, because he prefers not to leave that early.` }),
+        ...(tooEarly > 0 && { left_out: `I left out ${tooEarly} flight${tooEarly === 1 ? ' that leaves' : 's that leave'} before ${spokenTime(`T${earliest}`.padStart(16))}, because you prefer not to leave that early.` }),
+        // The model follows a hint in the result more reliably than the prompt, so the order of the next questions lives here.
+        next: `${tooEarly > 0 ? 'After the return flight, say left_out. ' : ''}Then ask "Shall I text these to you?" and after that which option he would like. `
+          + 'As soon as he chooses, call choose_option.',
       };
     },
 
@@ -263,7 +337,7 @@ export function createTools(deps) {
       await deps.messages.sendSms(call.callerId, deps.texts.optionsSms(call.options, link));
       emit(call.id, 'screen', { what: 'sms', summary: `text 1 to the caller: ${call.options.length} options + trip link` });
       emit(call.id, 'screen', { what: 'options_page', summary: 'trip page created', url: link });
-      return { ok: true, sent: true, say: 'Tell him the text is on its way to the phone he is calling from, and that the link only shows his trip.' };
+      return { ok: true, sent: true, say: 'Tell him the text is on its way to the phone he is calling from, and that the link only shows his trip. Then ask which option he would like.' };
     },
 
     // Rule: the code comes from the fixed table or from the last flown trip on file, never from the model.
@@ -281,21 +355,53 @@ export function createTools(deps) {
         }
       }
       call.assistance = { code, summary: code ? ASSISTANCE[code] : NO_ASSISTANCE };
-      call.pendingHold = null;   // any earlier read-back is out of date now
-      return { ok: true, ...call.assistance, say: 'Read the summary back in plain words. Never say the code.' };
+      return recorded(call, cathay, call.assistance.summary, { ...call.assistance, say: 'Never say the code.' });
+    },
+
+    // The caller's own answers, one tool each: every answer is recorded, said back at once, and followed by one next question.
+    async choose_option(args, call, cathay) {
+      const index = call.options?.findIndex((o) => o.id === String(args.option_id)) ?? -1;
+      if (index < 0) return fail('That is not one of the options from this call. Ask which option he wants.');
+      const option = call.options[index];
+      call.choice = option.id;
+      return recorded(call, cathay, `The ${ORDINAL[index]} option: ${fmtDay(option.out.dep)} at ${spokenTime(option.out.dep)}, ${option.note || 'direct'}, ${spokenMoney(option.fare_hkd)} return.`);
+    },
+
+    // Rule: seat and meal come from the profile. The caller hears them and can object; a change is for staff, never invented here.
+    async set_preferences(args, call, cathay) {
+      const keep = yesNo(args.keep);
+      if (keep === null) return fail('Ask him first if the seat and meal on his membership are still right.');
+      const wishes = wishesOf(await profileOf(call, cathay));
+      call.prefs = keep ? 'kept' : 'change wanted';
+      return recorded(call, cathay, keep
+        ? `${wishes[0].toUpperCase()}${wishes.slice(1)}, as on your membership.`
+        : `On this call I can only book ${wishes}, as on your membership. A member of staff can change that after booking.`);
+    },
+
+    // Rule: the pay request goes to the caller's own number on file or to the delegate on file, as the caller chose.
+    async set_payer(args, call, cathay) {
+      if (args.payer !== 'self' && args.payer !== 'family') return fail('Ask him first who pays: himself, or his family payer.');
+      const delegate = args.payer === 'family' ? await cathay.getDelegate(call.token) : null;
+      if (args.payer === 'family' && !delegate) return fail('No family payer is on file for him. Tell him that, and that the pay request can come to his own phone.');
+      call.payer = args.payer;
+      return recorded(call, cathay, delegate ? `${delegate.name.split(' ')[0]} will be asked to pay.` : 'You will pay yourself. The pay request will come to your own phone.');
     },
 
     // Rules: two steps (read-back, then hold); only an option from this call; name, seat and meal from the profile.
     async hold_booking(args, call, cathay) {
       if (call.ref) return { ok: true, ref: call.ref, status: 'held', already_held: true };
-      const option = call.options?.find((o) => o.id === String(args.option_id));
-      if (!option) return fail('That is not one of the options from this call. Ask which option he wants.');
-      if (!call.assistance) return fail('Ask about wheelchair help first (set_assistance), then hold the booking.');
+      if (args.option_id != null) {   // he changed his option at the read-back
+        if (!call.options?.some((o) => o.id === String(args.option_id))) return fail('That is not one of the options from this call. Ask which option he wants.');
+        if (call.choice !== String(args.option_id)) { call.choice = String(args.option_id); call.pendingHold = null; }
+      }
+      const missing = await nextStep(call, cathay);
+      if (missing) return fail(`Not yet. ${missing} Never record an answer he has not given.`);
+      const option = call.options.find((o) => o.id === call.choice);
       const profile = await profileOf(call, cathay);
 
       const confirmed = yesNo(args.caller_confirmed) === true && call.pendingHold?.option_id === option.id;
       if (!confirmed) {
-        const payer = profile.has_delegate ? (await cathay.getDelegate(call.token))?.name ?? null : null;
+        const payer = call.payer === 'family' ? (await cathay.getDelegate(call.token))?.name ?? null : null;   // null = he pays himself
         call.pendingHold = { option_id: option.id, payer };
         return { ok: true, needs_confirmation: true, readback: readback(option, profile, call.assistance, payer) };
       }
@@ -309,19 +415,31 @@ export function createTools(deps) {
       });
       call.ref = order.ref;
       call.order = order;
+      call.paysSelf = call.pendingHold.payer === null;
       emit(call.id, 'state', { ref: order.ref, status: 'held' });   // the projector's booking status
       call.pendingHold = null;
       tripPage(call);   // the trip page now belongs to this booking (and exists even if no text was sent)
       return {
         ok: true, ref: order.ref, ref_spoken: [...order.ref].join(' '), status: 'held',
-        say: 'Tell him the booking is held and read the reference letter by letter. Then offer to send the pay request to his family payer.',
+        say: 'Tell him the booking is held and read the reference letter by letter. Then ask if you may send the pay request now, and call send_pay_link only after he says yes.',
       };
     },
 
-    // Rule: only to the delegate on file with consent. The model cannot name a recipient.
+    // Rule: only to the payer fixed at the read-back: the delegate on file with consent, or the caller's own number on file.
+    // The model cannot name a recipient.
     async send_pay_link(_args, call, cathay) {
       if (!call.ref) return fail('There is no held booking yet. Hold the booking first.');
       if (call.payRequested) return { ok: true, sent_to: call.payRequested, already_sent: true };
+      if (call.paysSelf) {
+        // call.callerId IS the number on file (see text_options). shortcut: no email, the model-safe profile has none; text only.
+        await deps.messages.sendSms(call.callerId, deps.texts.payRequestSms(call.order, titleCase(call.order.passenger)));
+        emit(call.id, 'screen', { what: 'sms', summary: 'pay request text to the caller: "Reply PAY"' });
+        call.payRequested = 'his own phone';
+        return {
+          ok: true, sent_to: call.payRequested,
+          say: 'Tell him the pay request is on its way to his own phone and that he replies PAY to that text. A text with his booking and his needs card comes as soon as it is paid. Then ask if there is anything else you can help with.',
+        };
+      }
       const delegate = await cathay.getDelegate(call.token);
       if (!delegate) return fail('No family payer is on file for him. Say that a member of staff will call him about payment.');
       const first = delegate.name.split(' ')[0];
@@ -335,7 +453,10 @@ export function createTools(deps) {
         emit(call.id, 'screen', { what: 'sms', summary: `pay request text to ${first}: "Reply PAY"` });
       }
       call.payRequested = first;
-      return { ok: true, sent_to: first };
+      return {
+        ok: true, sent_to: first,
+        say: `Tell him it went to ${first}, and that a text with his booking and his needs card will come as soon as it is paid. Then ask if there is anything else you can help with.`,
+      };
     },
 
     // Rule: general Cathay knowledge comes only from our checked passages (RAG). The model may shorten them for speech,

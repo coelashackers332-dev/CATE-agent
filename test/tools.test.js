@@ -60,8 +60,8 @@ const run = (name, args) => tools.runTool(name, args, call);
 const VANCOUVER = { to: 'Vancouver', after: '2027-02-06', before: '2027-04-05' };
 const verify = () => run('verify_caller', { answer: 'Osaka, last May' });
 
-test('specs: the 8 tools, each with a description and a JSON Schema', () => {
-  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'set_assistance', 'hold_booking', 'send_pay_link', 'ask_cathay']);
+test('specs: the 11 tools, each with a description and a JSON Schema', () => {
+  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'choose_option', 'set_preferences', 'set_assistance', 'set_payer', 'hold_booking', 'send_pay_link', 'ask_cathay']);
   for (const s of tools.specs) {
     assert.ok(s.description.length > 40, s.name);
     assert.equal(s.inputSchema.type, 'object');
@@ -93,10 +93,10 @@ test('golden path: verify → profile → flights → text → assistance → ho
     { id: '2', out: { flight: 'CX0V3', from: 'HKG', to: 'YVR', city: 'Vancouver', dep: '2027-02-19T23:50', arr: '2027-02-19T19:50', stops: [] }, back, fare_hkd: 7960, note: '' },
     { id: '3', out: { flight: 'CX0T1', from: 'HKG', to: 'YVR', city: 'Vancouver', dep: '2027-02-19T09:10', arr: '2027-02-19T09:40', stops: ['NRT'] }, back, fare_hkd: 6900, note: 'via Tokyo, 4.5 hours longer' },
   ]);
-  assert.equal(found.read_out[0], 'Option 1: Friday 19 February, leaving at 11:40 am, direct, 8,420 Hong Kong dollars return.');
-  assert.equal(found.read_out[1], 'Option 2: Friday 19 February, leaving at 11:50 pm, direct, 7,960 Hong Kong dollars return.');
+  assert.equal(found.read_out[0], 'The first option leaves on Friday 19 February at 11:40 am. It is direct, and costs 8,420 Hong Kong dollars return.');
+  assert.equal(found.read_out[1], 'The second option leaves on Friday 19 February at 11:50 pm. It is direct, and costs 7,960 Hong Kong dollars return.');
   assert.equal(found.return_flight, 'Every option comes back on Wednesday 31 March, leaving at 1:30 pm.');
-  assert.match(found.left_out, /^1 flight leaving before 09:00/);
+  assert.equal(found.left_out, 'I left out 1 flight that leaves before 9:00 am, because you prefer not to leave that early.');
   assert.ok(!JSON.stringify(found).includes('06:30'), 'the 06:30 flight is filtered out');
   assert.equal(call.options, found.options);
 
@@ -106,16 +106,28 @@ test('golden path: verify → profile → flights → text → assistance → ho
   assert.deepEqual(sent.sms, [{ to: wong.phone, body: `OPTIONS 1,2,3 ${link}` }]);
   assert.deepEqual(store.pages.get(call.pageCode), { member_id: 'DEMO-0001', options: found.options, ref: null, expires: '2027-04-02' });
 
-  // 5. assistance: "like Osaka?" → the SSR of the latest flown order
+  // 5. his answers, one tool each: every result says the answer back and gives the one next question
+  const chosen = await run('choose_option', { option_id: '1' });
+  assert.equal(chosen.confirm, 'The first option: Friday 19 February at 11:40 am, direct, 8,420 Hong Kong dollars return.');
+  assert.match(chosen.next, /Your membership has a window seat and a vegetarian meal\. Is that still right\?/);
+  const kept = await run('set_preferences', { keep: true });
+  assert.equal(kept.confirm, 'A window seat and a vegetarian meal, as on your membership.');
+  assert.match(kept.next, /On your Osaka trip we arranged this: Wheelchair from check-in to the gate\. .* Would you like the same help again\?/);
+  // assistance: "like Osaka?" → the SSR of the latest flown order
   const same = await run('set_assistance', { same_as_last_trip: true });
   assert.equal(same.code, 'WCHR');
   assert.deepEqual(call.assistance, { code: 'WCHR', summary: 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat.' });
+  assert.match(same.next, /Would you like to pay yourself, or shall I ask Daniel to pay\?/);
+  assert.match((await run('hold_booking', {})).error, /^Not yet\. .*pay yourself/, 'no read-back until he has said who pays');
+  const payer = await run('set_payer', { payer: 'family' });
+  assert.equal(payer.confirm, 'Daniel will be asked to pay.');
+  assert.match(payer.next, /Call hold_booking now for the read-back\./);
 
   // 6. hold: read-back first, then the hold
   const first = await run('hold_booking', { option_id: '1' });
   assert.equal(first.needs_confirmation, true);
   assert.equal(first.ref, undefined);
-  assert.equal(first.readback, 'Booking for Wong Tak Ming. Hong Kong to Vancouver, flight CX0V1, Friday 19 February, leaving at 11:40 am. '
+  assert.equal(first.readback, 'Let me read it all back to you. Nothing is booked until you say yes. Booking for Wong Tak Ming. Hong Kong to Vancouver, flight CX0V1, Friday 19 February, leaving at 11:40 am. '
     + 'Coming back on flight CX0V2, Wednesday 31 March, leaving at 1:30 pm. Window seat, vegetarian meal. '
     + 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat. '
     + 'The total is 8,420 Hong Kong dollars for the return trip. Daniel Wong will be asked to pay. Shall I hold this booking?');
@@ -138,7 +150,7 @@ test('golden path: verify → profile → flights → text → assistance → ho
   assert.equal(store.orders.length, 2);
 
   // 7. pay request: only to the delegate on file
-  assert.deepEqual(await run('send_pay_link', { to: 'someone@else.example' }), { ok: true, sent_to: 'Daniel' });
+  assert.deepEqual(await run('send_pay_link', { to: 'someone@else.example' }), { ok: true, sent_to: 'Daniel', say: 'Tell him it went to Daniel, and that a text with his booking and his needs card will come as soon as it is paid. Then ask if there is anything else you can help with.' });
   assert.deepEqual(sent.email, [{ to: daniel.email, subject: 'Pay K7Q2XM', html: '<p>Daniel Wong</p>', text: 'Wong Tak Ming null'   /* PAYMENT=sms: no pay page, the email says reply PAY */ }]);
   if (config.payment === 'sms') assert.deepEqual(sent.sms.at(-1), { to: daniel.phone, body: 'PAYREQ K7Q2XM Wong Tak Ming' });
   assert.equal((await run('send_pay_link', {})).already_sent, true);
@@ -147,7 +159,7 @@ test('golden path: verify → profile → flights → text → assistance → ho
   // events: one tool_call + one tool_result per run, system lines from the adapter, screens from the tools
   const kinds = (k) => events.filter((e) => e.kind === k);
   assert.equal(kinds('tool_call').length, kinds('tool_result').length);
-  assert.equal(kinds('tool_call').length, 10);
+  assert.equal(kinds('tool_call').length, 14);
   assert.deepEqual(kinds('tool_call')[3].args, {}, 'undeclared inputs are dropped');
   assert.deepEqual(kinds('screen').map((e) => e.what), config.payment === 'sms' ? ['sms', 'options_page', 'pay_email', 'sms'] : ['sms', 'options_page', 'pay_email']);
   assert.ok(events.every((e) => e.call_id === 'c1'));
@@ -232,7 +244,10 @@ test('an unknown calling number cannot verify', async () => {
 test('hold_booking without a read-back confirmation creates nothing', async () => {
   await verify();
   await run('find_flights', VANCOUVER);
-  assert.match((await run('hold_booking', { option_id: '1', caller_confirmed: true })).error, /wheelchair/i, 'assistance comes first');
+  assert.match((await run('hold_booking', { option_id: '1', caller_confirmed: true })).error, /Is that still right/, 'seat and meal are asked first');
+  await run('set_preferences', { keep: true });
+  await run('set_payer', { payer: 'family' });
+  assert.match((await run('hold_booking', { option_id: '1', caller_confirmed: true })).error, /wheelchair/i, 'then wheelchair help');
   await run('set_assistance', { walk_in_cabin: true, stairs: true, long_distance: true });
 
   // "confirmed" with no read-back before it → it gets the read-back step, not a booking
@@ -333,4 +348,38 @@ test('ask_cathay: answers only from passages, says so when there are none, and n
   // With no knowledge base wired in, the tool still answers safely.
   const bare = createTools({ cathay: (callId) => createCathay({ base, callId }), baseUrl: BASE_URL });
   assert.equal((await bare.runTool('ask_cathay', { question: 'bags?' }, call)).found, false);
+});
+
+test('the caller can choose to pay himself: said back at once, in the read-back, and the pay request goes to his own phone', async () => {
+  await verify();
+  await run('find_flights', VANCOUVER);
+  await run('choose_option', { option_id: '1' });
+  // a wish for another seat or meal is recorded and answered honestly, never invented
+  const change = await run('set_preferences', { keep: false });
+  assert.equal(change.confirm, 'On this call I can only book a window seat and a vegetarian meal, as on your membership. A member of staff can change that after booking.');
+  await run('set_assistance', { same_as_last_trip: true });
+  assert.equal((await run('set_payer', { payer: 'my daughter' })).ok, false);
+  const self = await run('set_payer', { payer: 'self' });
+  assert.equal(self.confirm, 'You will pay yourself. The pay request will come to your own phone.');
+  const first = await run('hold_booking', {});
+  assert.match(first.readback, /The pay request will come to your own phone\. Shall I hold this booking\?$/);
+  // changing the payer after the read-back needs a new read-back, not a hold
+  await run('set_payer', { payer: 'family' });
+  const changed = await run('hold_booking', { caller_confirmed: true });
+  assert.match(changed.readback, /Daniel Wong will be asked to pay/);
+  await run('set_payer', { payer: 'self' });
+  await run('hold_booking', {});
+  const held = await run('hold_booking', { caller_confirmed: true });
+  assert.equal(held.ref, 'K7Q2XM');
+  assert.equal(store.orders.at(-1).payer, 'Wong Tak Ming');
+  assert.equal((await run('send_pay_link', {})).sent_to, 'his own phone');
+  assert.deepEqual(sent.sms.at(-1), { to: store.members[0].phone, body: 'PAYREQ K7Q2XM Wong Tak Ming' });
+  assert.equal(sent.email.length, 0);
+});
+
+test('no flights for the dates: the days we do fly are named, with no flight, fare or time', async () => {
+  await verify();
+  const none = await run('find_flights', { to: 'Vancouver', after: '2027-01-01', before: '2027-01-16' });
+  assert.equal(none.ok, false);
+  assert.match(none.error, /We fly to Vancouver on Friday 19 February, Saturday 20 February, and back on Wednesday 31 March/);
 });
