@@ -41,14 +41,13 @@ export function optionsSms(options, link) {
 export function bookedSms(order, profile, link) {
   const needs = (order.ssr ?? []).map((c) => `${needWords(c)}, ${c}`);
   if (profile?.speech?.pace === 'slow') needs.push('Please speak slowly');
-  const extras = [order.seat && `${order.seat} seat`, order.meal && `${order.meal} meal`].filter(Boolean).join(', ');
+  // Seat and meal are on the trip page; leaving them out keeps this text within 2 parts with a long link.
   return plain([
     `Cathay CATE: booked. Ref ${order.ref}, ${order.passenger}.`,
-    `Go: ${order.out.flight} ${when(order.out)} ${homeCity(order)} to ${tripCity(order)}.`,
-    `Back: ${order.back.flight} ${when(order.back)}.`,
-    extras && `${extras[0].toUpperCase()}${extras.slice(1)}.`,
-    needs.length && `Show airport staff: ${needs.join('. ')}.`,
-    `Same link: ${link}`,
+    `${order.out.flight} ${when(order.out)} ${homeCity(order)} to ${tripCity(order)}.`,
+    `Back ${order.back.flight} ${when(order.back)}.`,
+    needs.length && `Show staff: ${needs.join('. ')}.`,
+    `Trip: ${link}`,
   ].filter(Boolean).join('\n'));
 }
 
