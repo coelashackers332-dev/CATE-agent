@@ -148,6 +148,7 @@ payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
 |---|---|---|
 | `WS /local/stream` | the audio bridge on the team laptop (the `/bridge` page) | local only (no `X-Forwarded-For`) + admin secret (`?key=`); one call at a time |
 | `GET /v/:code` | Mr Wong, Daniel | random code; read-only; headers `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
+| `POST /v/:code` | Mr Wong, during his call (answer buttons on his trip page) | only while the call that owns this page is live, verified and nothing is held (otherwise the same 404 as an unknown code); one field `option=<id of his options>` or `payer=self|family`, body ≤ 2 KB; runs `choose_option` / `set_payer` on that call, tells the model what was pressed (`session.notify`), then 303 back to GET |
 | `GET /pay/:code`, `POST /pay/:code` | the payer: Mr Wong (Pay button on his trip page) or Daniel (pay email) | the trip page's random code; only while the booking is held (after payment, GET shows "Payment successful" and goes back to `/v/:code`); POST takes one field `method` from `METHODS`, body ≤ 2 KB, then 303 back to GET; no card or personal fields; headers as `/v/` plus a nonce CSP and `X-Frame-Options: DENY` |
 | `GET /projector` + `WS /events` | team laptop | admin secret (`?key=`) |
 | `GET /bridge` | team laptop: the audio bridge page (`screens/bridge.html`). The call is answered on the laptop (Phone Link, audio through virtual cables) and the page connects it to `WS /local/stream` | this machine only + admin secret (`?key=`) |

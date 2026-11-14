@@ -51,13 +51,52 @@ export function createApp(deps) {
   };
   bus.on('event', onEvent);
 
-  function tripPage(code, res) {
+  const livePage = (code) => {
     const page = store.pages.get(code);
-    if (!page || (page.expires != null && Date.now() > new Date(page.expires).getTime())) return notFound(res);
+    return Boolean(page) && !(page.expires != null && Date.now() > new Date(page.expires).getTime());
+  };
+  // The live call that owns this trip page, while it is verified and nothing is held yet; otherwise null.
+  const askingCall = (code) => {
+    const call = store.activeCall;
+    return call && call.pageCode === code && call.verified && !call.ref ? call : null;
+  };
+
+  function tripPage(code, res) {
+    if (!livePage(code)) return notFound(res);
+    const page = store.pages.get(code);
     const order = page.ref ? findOrder(page.ref) : null;
+    const profile = findMember(page.member_id);
     // PAYMENT=page: a traveller who pays himself gets a Pay button to the demo pay page while his booking is held.
     const payUrl = config.payment === 'page' ? `/pay/${code}` : null;
-    html(res, 200, renderTripPage({ page, order, profile: findMember(page.member_id), now: Date.now(), payUrl }));
+    // While his call is live, the page also takes his answers by button (which flight, who pays).
+    const call = askingCall(code);
+    const delegate = profile?.delegates?.find((d) => d.consent);
+    const live = call ? { choice: call.choice ?? null, payer: call.payer ?? null, family: delegate?.name.split(' ')[0] ?? '' } : null;
+    html(res, 200, renderTripPage({ page, order, profile, now: Date.now(), payUrl, live }));
+  }
+
+  /** POST /v/:code: an answer button on the trip page (option=<id> or payer=self|family), run as the same tool the call uses. */
+  // Without a live call that is still asking, the page is read-only: the same 404 as an unknown code.
+  async function tripAnswer(req, res, code) {
+    const call = livePage(code) ? askingCall(code) : null;
+    if (!call) return notFound(res);
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+      if (body.length > 2048) return res.writeHead(413, { Connection: 'close' }).end();
+    }
+    const form = new URLSearchParams(body);
+    const option = form.get('option');
+    const payer = form.get('payer');
+    // The model is told what was pressed, so the call and the page stay one conversation.
+    if (option && call.options.some((o) => String(o.id) === option)) {
+      const r = await tools.runTool('choose_option', { option_id: option }, call);
+      if (r.ok) call.session?.notify?.(`He just chose flight ${option} with the button on his trip page. ${r.confirm ?? ''} Say that back to him and go on.`);
+    } else if (payer === 'self' || payer === 'family') {
+      const r = await tools.runTool('set_payer', { payer }, call);
+      if (r.ok) call.session?.notify?.(`He just answered who pays with the button on his trip page. ${r.confirm ?? ''} Say that back to him and go on.`);
+    }
+    res.writeHead(303, { Location: `/v/${code}`, ...PRIVATE }).end();
   }
 
   async function route(req, res) {
@@ -65,6 +104,7 @@ export function createApp(deps) {
     const is = (method, p) => req.method === method && path === p;
 
     if (req.method === 'GET' && path.startsWith('/v/')) return tripPage(path.slice(3), res);
+    if (req.method === 'POST' && path.startsWith('/v/')) return tripAnswer(req, res, path.slice(3));
     if (path.startsWith('/pay/')) return payment.payRoute(req, res, path.slice(5), () => notFound(res));
     if (is('GET', '/projector') && isAdmin(new URLSearchParams(query).get('key'))) return html(res, 200, projectorHtml);
     // The bridge page for the laptop phone line. The line has no caller ID, so it answers on this machine only, never through the tunnel.

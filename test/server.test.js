@@ -211,6 +211,42 @@ test('GET /v/:code: page with privacy headers; unknown and expired codes are the
   assert.equal((await post('/v/good-code')).status, 404, 'read-only');
 });
 
+test('POST /v/:code: answer buttons run the call\'s own tools only while that call is live, verified and nothing is held', async () => {
+  store.pages.set('live-code', { member_id: 'DEMO-0001', options: [{ id: '1' }, { id: '2' }], ref: null, expires: Date.now() + 60_000 });
+  const ran = [];
+  const notes = [];
+  const realRun = deps.tools.runTool;
+  deps.tools.runTool = async (name, args) => { ran.push([name, args]); return { ok: true, confirm: `${name} done.` }; };
+  const form = (path, body) => fetch(base + path, { method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+  try {
+    // no live call: read-only
+    assert.equal((await form('/v/live-code', 'option=1')).status, 404);
+    store.activeCall = { id: 'c-live', pageCode: 'live-code', verified: true, ref: null, options: [{ id: '1' }, { id: '2' }], session: { notify: (t) => notes.push(t) } };
+    const chose = await form('/v/live-code', 'option=2');
+    assert.equal(chose.status, 303);
+    assert.equal(chose.headers.get('location'), '/v/live-code');
+    await form('/v/live-code', 'payer=family');
+    await form('/v/live-code', 'option=9');          // not one of his options: ignored
+    await form('/v/live-code', 'payer=someone');     // not an answer: ignored
+    assert.deepEqual(ran, [['choose_option', { option_id: '2' }], ['set_payer', { payer: 'family' }]]);
+    assert.equal(notes.length, 2);
+    assert.match(notes[0], /chose flight 2 with the button on his trip page/);
+    // another page's code, an unverified call, or a held booking: read-only again
+    assert.equal((await form('/v/good-code', 'option=1')).status, 404);
+    store.activeCall.verified = false;
+    assert.equal((await form('/v/live-code', 'option=1')).status, 404);
+    store.activeCall.verified = true;
+    store.activeCall.ref = 'K7Q2XM';
+    assert.equal((await form('/v/live-code', 'option=1')).status, 404);
+    store.activeCall.ref = null;
+    assert.equal((await form('/v/live-code', 'x='.padEnd(3000, 'a'))).status, 413);
+    assert.equal(ran.length, 2);
+  } finally {
+    deps.tools.runTool = realRun;
+    store.activeCall = null;
+  }
+});
+
 test('POST /dev/pay: admin key only; pays the held booking once; nothing held is a 409', async () => {
   assert.equal((await post('/dev/pay', { 'x-admin-key': 'test-admin' })).status, 409);
   const ref = holdOrder();
