@@ -13,6 +13,7 @@ export const config = {
   adminSecret: env('ADMIN_SECRET') || randomBytes(12).toString('base64url'),
   demoMode: env('DEMO_MODE', '1') === '1',
   demoCallerNumber: env('DEMO_CALLER_NUMBER'),
+  demoCallerEmail: env('DEMO_CALLER_EMAIL'),
   danielPhone: env('DANIEL_PHONE'),
   danielEmail: env('DANIEL_EMAIL'),
   messages: env('MESSAGES', 'log'),   // log | live
