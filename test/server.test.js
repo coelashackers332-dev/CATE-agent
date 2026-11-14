@@ -348,7 +348,7 @@ test('messages: log mode masks the number; live email needs a mail login', async
   const log = console.log;
   console.log = (line) => lines.push(String(line));
   try {
-    const m = createMessages({ mode: 'log' });
+    const m = createMessages({ mode: 'log', texts: 'sms' });   // fixed, whatever a local .env says
     await m.sendSms(WONG, 'Cathay CATE: booked.');
     await m.sendEmail('daniel@example.com', 'Pay for a flight', '<p>hi</p>', 'hi');
   } finally {
@@ -358,5 +358,5 @@ test('messages: log mode masks the number; live email needs a mail login', async
   assert.match(lines[1], /^\[EMAIL\] to d\*\*\*@example\.com \| Pay for a flight\nhi/);
   assert.ok(!lines.join('').includes(WONG) && !lines.join('').includes('daniel@'));
   // An empty login on purpose: a real one in a local .env must never be used by a test.
-  await assert.rejects(createMessages({ mode: 'live', email: { user: '', pass: '' } }).sendEmail('daniel@example.com', 's', '<p>h</p>', 'h'), /EMAIL_USER/);
+  await assert.rejects(createMessages({ mode: 'live', texts: 'sms', email: { user: '', pass: '' } }).sendEmail('daniel@example.com', 's', '<p>h</p>', 'h'), /EMAIL_USER/);
 });

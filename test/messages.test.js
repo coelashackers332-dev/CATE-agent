@@ -1,10 +1,18 @@
-// Live email (src/messages.js) against a pretend mail server on this machine. Nothing leaves the laptop.
+// Live email and texts by email (src/messages.js) against a pretend mail server on this machine.
+// Nothing leaves the laptop.
 import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import net from 'node:net';
 import { once } from 'node:events';
+import { config } from '../src/config.js';
 import { bus } from '../src/events.js';
+import { store } from '../src/store.js';
 import { createMessages } from '../src/messages.js';
+
+// Tests load .env, and a real Twilio login there must never be used here: with these empty,
+// a text that wrongly went to Twilio would fail instead of reaching a phone.
+config.twilio.accountSid = '';
+config.twilio.authToken = '';
 
 const USER = 'cate.team@example.com';
 const PASS = 'abcd efgh ijkl mnop';   // as Google shows an app password
@@ -42,6 +50,7 @@ before(async () => {
         const verb = line.slice(0, 4).toUpperCase();
         if (verb === 'EHLO') socket.write('250-pretend.smtp at your service\r\n250-AUTH LOGIN PLAIN\r\n250 8BITMIME\r\n');
         else if (verb === 'AUTH') socket.write(behave.rejectLogin ? '535-5.7.8 Username and Password not accepted.\r\n535 5.7.8 Learn more at the help page\r\n' : '235 2.7.0 Accepted\r\n');
+        else if (verb === 'RCPT' && behave.rejectRcpt) socket.write(`${behave.rejectRcpt}\r\n`);
         else if (verb === 'MAIL' || verb === 'RCPT') socket.write('250 2.1.0 OK\r\n');
         else if (verb === 'DATA') { inMessage = true; socket.write('354 Go ahead\r\n'); }
         else if (verb === 'QUIT') socket.end('221 2.0.0 closing connection\r\n');
@@ -56,16 +65,20 @@ const events = [];
 const onEvent = (ev) => events.push(ev);
 before(() => bus.on('event', onEvent));
 after(() => bus.off('event', onEvent));
+before(() => store.reset({ log: false }));   // the membership data, where texts by email find their address
 beforeEach(() => {
   seen = { commands: [], message: '' };
   behave = {};
   events.length = 0;
 });
 
-const live = (email = {}) => createMessages({
+const live = (email = {}, texts = 'sms') => createMessages({
   mode: 'live',
+  texts,
   email: { user: USER, pass: PASS, connect: () => net.connect(smtp.address().port, '127.0.0.1'), ...email },
 });
+const wong = () => store.members.find((m) => m.member_id === 'DEMO-0001');
+const rcpts = () => seen.commands.filter((c) => c.startsWith('RCPT'));
 const unbase64 = (s) => Buffer.from(s.replace(/\s+/g, ''), 'base64').toString('utf8');
 async function until(check, what) {
   for (let i = 0; i < 200; i++) {
@@ -145,15 +158,66 @@ test('live email: a mail server that hangs up is an error, not a hang', async ()
   await assert.rejects(live().sendEmail(TO, 's', '<p>h</p>', 'h'), /Email to d\*\*\*@example\.com failed: the mail server closed the connection early/);
 });
 
-test('log mode prints the email with the address masked and never connects', async () => {
+test('a number or an address that the mail server quotes back is masked in the error', async () => {
+  behave.rejectRcpt = '550 5.1.1 <daniel@example.com> (+85200000042) does not exist';
+  const failure = await live().sendEmail(TO, 's', '<p>h</p>', 'h').then(() => null, (err) => err);
+  assert.match(failure.message, /the mail server said: 550 5\.1\.1 <d\*\*\*@example\.com> \(\*\*\*0042\) does not exist$/);
+  assert.doesNotMatch(failure.message, /daniel@|\+852/);
+});
+
+test('texts by email: each text goes to the address on file for that number, its first line as the subject', async () => {
+  const daniel = wong().delegates[0];
+  const text = 'Cathay CATE: booked. Ref K7Q2XM, WONG TAK MING.\nSame link: https://cate.test/v/abc';
+  await live({}, 'email').sendSms(wong().phone, text);
+  assert.deepEqual(rcpts(), [`RCPT TO:<${wong().email}>`]);
+  const { headers, parts } = parse(seen.message);
+  assert.equal(headers.subject, 'Cathay CATE: booked. Ref K7Q2XM, WONG TAK MING.');
+  assert.deepEqual(parts, [{ type: 'text/plain', text }], 'the same words as the text, nothing added');
+
+  await live({}, 'email').sendSms(daniel.phone, 'Cathay CATE: Wong Tak Ming asks you to pay for a flight.');
+  assert.equal(rcpts().at(-1), `RCPT TO:<${daniel.email}>`, "the family payer's own address");
+
+  const told = events.filter((e) => e.system === 'Messages').map((e) => [e.action, e.ok, e.summary]);
+  assert.deepEqual(told, [['send_sms', true, '✓ text sent by email'], ['send_sms', true, '✓ text sent by email']]);
+  assert.doesNotMatch(JSON.stringify(events), /@|\+\d{8}/, 'no address or number reaches the projector');
+});
+
+test('texts by email: a number on file written with spaces, as people type it in .env, still finds its address', async () => {
+  const member = wong();
+  const onFile = member.phone;
+  member.phone = '+852 0000 0042';
+  try {
+    await live({}, 'email').sendSms('+85200000042', 'Cathay CATE: your Vancouver flights');   // as Twilio gives the caller's number
+  } finally {
+    member.phone = onFile;
+  }
+  assert.deepEqual(rcpts(), [`RCPT TO:<${member.email}>`]);
+});
+
+test('texts by email: a number with no address on file is refused before any connection', async () => {
+  const failure = await live({ connect: () => assert.fail('must not connect') }, 'email')
+    .sendSms('+85200000098', 'Cathay CATE: hello').then(() => null, (err) => err);
+  assert.equal(failure.message, 'SMS to ***0098 by email (no address on file) failed: no email address on file for that number');
+  assert.deepEqual(events.filter((e) => e.system === 'Messages').map((e) => [e.ok, e.summary]), [[false, '✗ text not sent']]);
+});
+
+test('TEXTS must be sms or email: a typo stops the server at start, not on stage', () => {
+  assert.throws(() => createMessages({ mode: 'log', texts: 'emial' }), /TEXTS must be sms or email, not "emial"/);
+});
+
+test('log mode prints the email and the routed text with the address and number masked, and never connects', async () => {
   const lines = [];
   const log = console.log;
   console.log = (line) => lines.push(String(line));
   try {
-    await createMessages({ mode: 'log', email: { user: USER, pass: PASS, connect: () => assert.fail('must not connect') } })
-      .sendEmail(TO, 'Pay for a flight', '<p>hi</p>', 'hi');
+    const logOnly = (texts) => createMessages({ mode: 'log', texts, email: { user: USER, pass: PASS, connect: () => assert.fail('must not connect') } });
+    await logOnly('sms').sendEmail(TO, 'Pay for a flight', '<p>hi</p>', 'hi');
+    await logOnly('email').sendSms(wong().phone, 'Cathay CATE: hi');
   } finally {
     console.log = log;
   }
   assert.match(lines[0], /^\[EMAIL\] to d\*\*\*@example\.com \| Pay for a flight\nhi/);
+  const [name, domain] = wong().email.split('@');
+  assert.equal(lines[1], `[SMS] to ***${wong().phone.slice(-4)} by email (${name[0]}***@${domain})\nCathay CATE: hi\n`);
+  assert.ok(!lines.join('').includes(wong().phone) && !lines.join('').includes(`${name}@`));
 });
