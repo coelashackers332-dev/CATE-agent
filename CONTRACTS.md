@@ -135,7 +135,7 @@ export function notFoundPage() → string
 // src/screens/pay.js  (the pay page; Harell's screen, in Cavell's design)
 export const METHODS → [{ id, label, note? }]        // card, Apple Pay, Google Pay, FPS, PayMe, AlipayHK, Octopus
 export const BACK_AFTER_S = 3
-export function renderPayPage({ order, code, nonce, error }) → string   // held: amount, the trip in one line, methods, one Pay button
+export function renderPayPage({ order, code, nonce, error }) → string   // held: only the ways to pay and one Pay button (with the amount)
 export function renderPaidPage({ order, code, nonce }) → string         // paid: "Payment successful", back to /v/:code after BACK_AFTER_S s (and a button)
 // src/payment.js  (server side)
 export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref,'paid'), order.paid_with = source, notify the live session, then text 2

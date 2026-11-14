@@ -1,10 +1,10 @@
 // The pay page behind the one pay link, /pay/<trip page code>. Mr Wong reaches it from the Pay button on his trip page,
-// or the family payer (Daniel) from the pay email. The payer chooses how to pay and taps Pay; the page says the
-// payment went through, then goes back to the trip page by itself.
+// or the family payer (Daniel) from the pay email. It shows only the ways to pay and one Pay button: the trip itself
+// is on the trip page. After the tap: "Payment successful", then back to the trip page by itself.
 // A demo: no money moves and nothing is asked for, so the page has no card fields at all.
 // The look is Cavell's (the trip page's CSS, from his design sheet for this page). payment.js serves these pages and
 // marks the booking paid; this file only draws them.
-import { esc, money, fmtDay, tripCity, homeCity } from './trip.js';
+import { esc, money } from './trip.js';
 
 /** What the payer can choose, in this order. `id` is what the form sends back; `label` is shown and logged. */
 export const METHODS = [
@@ -22,7 +22,6 @@ export const methodLabel = (id) => METHODS.find((m) => m.id === id)?.label ?? nu
 /** Seconds "Payment successful" shows before the page goes back to the trip page. */
 export const BACK_AFTER_S = 3;
 
-const nameCase = (s) => String(s ?? '').trim().split(/\s+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0];
 const sameName = (a, b) => String(a ?? '').trim().toLowerCase().replace(/\s+/g, ' ') === String(b ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 /** True when the traveller pays for himself (Marvel's `self_pay` flag on the order, else the payer is the passenger). */
@@ -68,8 +67,8 @@ const CSS = `
   .sec { background: var(--glass); -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
     border: 1px solid var(--glass-edge); border-radius: 22px; padding: 22px 20px;
     box-shadow: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 18px 40px rgba(0, 30, 32, .28); }
-  h2 { font-size: 24px; line-height: 1.2; font-weight: 700; margin-bottom: 14px; }
   .soft { color: var(--muted); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
   /* Notice, and the one main button */
   .status { background: var(--soft); border-left: 6px solid var(--accent); border-radius: 10px; padding: 14px 16px; }
@@ -83,8 +82,7 @@ const CSS = `
   .paynote { margin-top: 10px; font-size: 17px; }
 
   /* Ways to pay: one big card each. The radio button is hidden; the card itself shows the choice. */
-  fieldset { border: 0; margin: 18px 0 0; padding: 0; min-width: 0; }
-  legend { padding: 0; margin-bottom: 10px; font-size: 22px; font-weight: 700; }
+  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
   .err { margin-bottom: 12px; }
   .methods { display: grid; gap: 10px; }
   .method { position: relative; display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 10px 18px;
@@ -100,11 +98,6 @@ const CSS = `
     .method { background: rgba(255, 255, 255, .04); }
     .method:has(input:checked), .method.on { border-color: var(--accent); background: rgba(143, 208, 203, .10); box-shadow: inset 6px 0 0 var(--accent); }
   }
-
-  /* The safety note sits on the jade, below the panes */
-  .safe { padding: 6px 8px 0; font-size: 17px; color: var(--on-jade-soft); }
-  .safe b { color: var(--on-jade); }
-  .safe p + p { margin-top: 8px; }
 
   /* Solid panes when the phone asks for less transparency or more contrast, or cannot blur */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { :root { --glass: rgba(255, 255, 255, .97); } }
@@ -142,42 +135,21 @@ const top = (h1, lede) => `<header class="top">
   <h1>${esc(h1)}</h1>${lede ? `\n  <p class="lede">${esc(lede)}</p>` : ''}
 </header>`;
 
-const footer = `<footer class="safe">
-  <p><b>Cathay never asks for passwords or card numbers here.</b></p>
-  <p>Prototype: a test payment, illustrative fares and sample flights.</p>
-</footer>`;
-
-/** What is being paid for, in one line, as on Cavell's sketch: "Hong Kong to Vancouver, Saturday 21 November. Back ... Booking K7Q2XM." */
-function tripLine(order) {
-  const from = homeCity(order);
-  const to = tripCity(order);
-  const route = from && to ? `${from} to ${to}` : to ? `Flights to ${to}` : 'Your flights';
-  const out = order.out?.dep ? `, ${fmtDay(order.out.dep)}` : '';
-  const back = order.back?.dep ? ` Back ${fmtDay(order.back.dep)}.` : '';
-  return `${route}${out}.${back} Booking ${order.ref}.`;
-}
-
 /**
- * The page for a held booking: the amount, what it pays for, the ways to pay and one Pay button. The form posts back
+ * The page for a held booking: only the ways to pay and one Pay button (with the amount on it). The form posts back
  * to the same address. `error` is shown above the ways to pay (e.g. when none was chosen). `nonce` must match the CSP.
  */
 export function renderPayPage({ order, code, nonce, error = '' }) {
-  const self = paysHimself(order);
   const amount = money(order.fare_hkd);
-  const traveller = nameCase(order.passenger);
   const methods = METHODS.map((m) => `<label class="method">
         <input type="radio" name="method" value="${esc(m.id)}" required>
         <span><span class="name">${esc(m.label)}</span>${m.note ? `<span class="note">${esc(m.note)}</span>` : ''}</span>
         <small>Selected</small>
       </label>`).join('\n      ');
-  const title = self ? 'Pay for your trip' : `Pay for ${traveller}'s trip`;
-  const lede = self ? 'Your flights are held for you.' : `${traveller} asked you to pay for these flights.`;
-  return shell(`Pay for booking ${order.ref}`, `${top(title, lede)}
+  return shell('Choose how to pay', `${top('Choose how to pay')}
 <form class="sec payform" method="post" action="/pay/${esc(encodeURIComponent(code))}">
-  <h2>${esc(amount)}</h2>
-  <p>${esc(tripLine(order))}</p>
   <fieldset>
-    <legend>Choose how to pay</legend>
+    <legend class="sr">Ways to pay</legend>
     ${error ? `<p class="status err" role="alert"><b>${esc(error)}</b>Tap one of the ways to pay, then tap Pay.</p>` : ''}
     <div class="methods">
       ${methods}
@@ -186,7 +158,6 @@ export function renderPayPage({ order, code, nonce, error = '' }) {
   <button class="pay" type="submit">Pay ${esc(amount)}</button>
   <p class="soft paynote">Test payment. No real money moves.</p>
 </form>
-${footer}
 <script nonce="${esc(nonce)}">
   // Shows the choice on phones without :has(), and says "Paying" after the tap. Without JavaScript the form still works.
   const form = document.querySelector('.payform');
@@ -206,12 +177,9 @@ export function renderPaidPage({ order, code, nonce }) {
   const trip = `/v/${encodeURIComponent(code)}`;
   const how = METHODS.some((m) => m.label === order.paid_with) ? ` with ${order.paid_with}` : '';
   const thanks = self || !firstName(order.payer) ? 'Thank you.' : `Thank you, ${firstName(order.payer)}.`;
-  const confirmation = self ? 'Your booking confirmation is on its way to you by email.' : `${nameCase(order.passenger)} gets the booking confirmation by email.`;
-  return shell(`Paid: booking ${order.ref}`, `${top('Payment successful', thanks)}
+  return shell('Payment successful', `${top('Payment successful', `${money(order.fare_hkd)} paid${how}.`)}
 <div class="sec">
-  <p class="status" role="status"><b>${esc(money(order.fare_hkd))} paid${esc(how)}</b>${esc(tripLine(order))} ${esc(confirmation)}</p>
+  <p class="status" role="status"><b>${esc(thanks)}</b>Going back to the trip page in ${BACK_AFTER_S} seconds.</p>
   <a class="pay" href="${esc(trip)}">Back to the trip</a>
-  <p class="soft paynote">Going back to the trip page in ${BACK_AFTER_S} seconds.</p>
-</div>
-${footer}`, nonce, trip);
+</div>`, nonce, trip);
 }

@@ -68,7 +68,7 @@ async function until(check, what) {
   assert.fail(`timed out waiting for ${what}`);
 }
 
-test('a held booking\'s pay link shows the trip, the amount and every method, and asks for nothing', async () => {
+test('a held booking\'s pay link shows only the ways to pay and one Pay button, and asks for nothing', async () => {
   booking();
   const res = await open();
   assert.equal(res.status, 200);
@@ -83,12 +83,11 @@ test('a held booking\'s pay link shows the trip, the amount and every method, an
   const page = await read(res);
   assert.ok(nonce && page.includes(`<script nonce="${nonce}">`), 'the page script carries this response\'s nonce');
 
-  assert.match(page, /<h1>Pay for Wong Tak Ming's trip<\/h1>/);
-  assert.match(page, /Wong Tak Ming asked you to pay for these flights\./);
-  assert.match(page, /<h2>HKD 9,350<\/h2>/);
-  assert.match(page, /Hong Kong to Vancouver, Saturday 21 November\. Back Sunday 29 November\. Booking K7Q2XM\./, 'the trip in one line, no options to choose');
+  assert.match(page, /<title>Choose how to pay<\/title>/);
+  assert.match(page, /<h1>Choose how to pay<\/h1>/);
   assert.match(page, /<button class="pay" type="submit">Pay HKD 9,350<\/button>/);
   for (const m of METHODS) assert.ok(page.includes(`value="${m.id}"`), `offers ${m.label}`);
+  assert.doesNotMatch(page.replace(/nonce="[^"]*"/g, ''), /Vancouver|K7Q2XM|Wong|Daniel|Held for you|Waiting for/i, 'only the ways to pay: no trip, booking or names');
   assert.doesNotMatch(page, /type="(text|number|tel|email|password)"|autocomplete="cc-/, 'no card or personal fields');
   assert.doesNotMatch(page, /http-equiv="refresh"/, 'the pay page stays until the payer taps Pay');
   assert.equal(findOrder('K7Q2XM').status, 'held', 'opening the page pays nothing');
@@ -134,9 +133,8 @@ test('paying marks the booking paid once: the call hears it, then text 2; the pa
   assert.equal(done.status, 200);
   const page = await read(done);
   assert.match(page, /<h1>Payment successful<\/h1>/);
-  assert.match(page, /Thank you, Daniel\./);
-  assert.match(page, /<b>HKD 9,350 paid with Apple Pay<\/b>Hong Kong to Vancouver, Saturday 21 November\. Back Sunday 29 November\. Booking K7Q2XM\./);
-  assert.match(page, /Wong Tak Ming gets the booking confirmation by email\./);
+  assert.match(page, /<p class="lede">HKD 9,350 paid with Apple Pay\.<\/p>/);
+  assert.ok(page.includes(`<b>Thank you, Daniel.</b>Going back to the trip page in ${BACK_AFTER_S} seconds.`));
   assert.ok(page.includes(`<meta http-equiv="refresh" content="${BACK_AFTER_S};url=/v/${CODE}">`), 'goes back to the trip page by itself');
   assert.ok(page.includes(`href="/v/${CODE}"`), 'and has a button for it');
 
@@ -169,22 +167,20 @@ test('an oversized form is refused and pays nothing', async () => {
   assert.equal(findOrder('K7Q2XM').status, 'held');
 });
 
-test('a traveller paying for himself is spoken to as "you"', async () => {
+test('a traveller paying for himself sees the same page, and is thanked without a name', async () => {
   booking({ payer: 'Wong Tak Ming' });
-  const page = await read(await open());
-  assert.match(page, /<h1>Pay for your trip<\/h1>/);
-  assert.match(page, /Your flights are held for you\./);
+  assert.match(await read(await open()), /<h1>Choose how to pay<\/h1>/);
   await pay('octopus');
   const done = await read(await open());
-  assert.match(done, /Thank you\./);
+  assert.match(done, /HKD 9,350 paid with Octopus\./);
+  assert.match(done, /<b>Thank you\.<\/b>/);
   assert.doesNotMatch(done, /Thank you, /);
-  assert.match(done, /HKD 9,350 paid with Octopus/);
-  assert.match(done, /Your booking confirmation is on its way to you by email\./);
 });
 
-test('names reach the page as text, never as HTML', async () => {
-  booking({ passenger: '<img src=x onerror=alert(1)>', payer: '<b>Mallory</b>' });
+test('a name reaches the page as text, never as HTML', async () => {
+  booking({ payer: '<b>Mallory</b>' });
+  await pay('card');
   const page = await (await open()).text();
-  assert.ok(!page.includes('<img src=x'), 'no raw HTML from a name');
-  assert.ok(page.includes('&lt;img'), 'shown escaped instead');
+  assert.ok(!page.includes('<b>Mallory'), 'no raw HTML from a name');
+  assert.ok(page.includes('Thank you, &lt;b&gt;Mallory&lt;/b&gt;.'), 'shown escaped instead');
 });
