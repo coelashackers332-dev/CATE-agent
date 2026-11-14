@@ -5,7 +5,7 @@
 //                   lines carry the call id (preferred); or one adapter instance (its lines then carry its own callId).
 //   deps.messages : { sendSms(to, body), sendEmail(to, subject, html, text) }
 //   deps.texts    : { optionsSms(options, link), payRequestSms(order, travellerName) }
-//   deps.emails   : { payEmail({ order, travellerName, payerName, payUrl }) }
+//   deps.emails   : (not used by the tools any more: the member pays himself on his trip page)
 //   deps.baseUrl  : public address used in trip-page links (default config.baseUrl)
 //   deps.knowledge: { search(question, limit) → Promise<[{ title, text, source, checked }]> }, [] when nothing is relevant.
 //                   Optional: without it ask_cathay always answers "I do not have that information".
@@ -158,18 +158,8 @@ const specs = [
     },
   },
   {
-    name: 'set_payer',
-    description: 'Call as soon as he says who pays: self (the pay request comes to his own phone) or family (the family payer on his membership). Records his answer. '
-      + 'Never call it before he has answered that question.',
-    inputSchema: {
-      type: 'object',
-      properties: { payer: { type: 'string', enum: ['self', 'family'], description: 'Who pays, as he said' } },
-      required: ['payer'],
-    },
-  },
-  {
     name: 'hold_booking',
-    description: 'Call for the read-back once his option, seat and meal, wheelchair help and payer are all recorded; if one is missing it tells you what to ask. '
+    description: 'Call for the read-back once his option, seat and meal, and wheelchair help are all recorded; if one is missing it tells you what to ask. '
       + 'The first call returns a readback: say it to him word for word and wait. '
       + 'Only after he clearly says yes to that question, call again with caller_confirmed true; a reply about anything else is not a yes. Then tell him the booking reference, letter by letter.',
     inputSchema: {
@@ -182,9 +172,8 @@ const specs = [
   },
   {
     name: 'send_pay_link',
-    description: 'Call after the booking is held, and only after he says yes to sending the pay request now. It goes to the payer he chose at the read-back, '
-      + 'himself or his family payer, and to nobody else. It takes no input. '
-      + 'Tell him who it went to. You will be told when the payment arrives.',
+    description: 'Call right after the booking is held. The member pays himself: the payment page opens on his phone (or the pay request goes to '
+      + 'his own phone), never to anyone else. It takes no input. Say what the result tells you. You will be told when the payment arrives.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -225,7 +214,7 @@ export function createTools(deps) {
     return `${baseUrl}/v/${call.pageCode}`;
   }
 
-  function readback(option, profile, assistance, payer) {
+  function readback(option, profile, assistance) {
     const { out, back } = option;
     const wishes = [profile.prefs?.seat && `${profile.prefs.seat} seat`, profile.prefs?.meal && `${profile.prefs.meal} meal`].filter(Boolean).join(', ');
     return [
@@ -236,7 +225,7 @@ export function createTools(deps) {
       wishes && `${wishes[0].toUpperCase()}${wishes.slice(1)}.`,
       assistance.summary,
       `The total is ${spokenMoney(option.fare_hkd)} for the return trip.`,
-      payer ? `${payer} will be asked to pay.` : 'The pay request will come to your own phone.',
+      config.payment === 'page' ? 'Once it is held, the payment page opens on your phone.' : 'The pay request will come to your own phone.',
       'Shall I hold this booking?',
     ].filter(Boolean).join(' ');
   }
@@ -254,11 +243,6 @@ export function createTools(deps) {
       return last
         ? `Ask: "On your ${last.to} trip we arranged this: ${last.assistance} Would you like the same help again?" On a yes call set_assistance with same_as_last_trip true; otherwise ask its three wheelchair questions, one at a time.`
         : 'Ask the three wheelchair questions of set_assistance, one at a time, then call it.';
-    }
-    if (!call.payer) {
-      const delegate = profile.has_delegate ? await cathay.getDelegate(call.token) : null;
-      if (!delegate) call.payer = 'self';   // nobody else can pay, so there is nothing to ask
-      else return `Ask: "Would you like to pay yourself, or shall I ask ${delegate.name.split(' ')[0]} to pay?" Then call set_payer with his answer.`;
     }
     return null;
   }
@@ -412,15 +396,6 @@ export function createTools(deps) {
         : `A ${kept.join(' and a ')}, as on your membership.`);
     },
 
-    // Rule: the pay request goes to the caller's own number on file or to the delegate on file, as the caller chose.
-    async set_payer(args, call, cathay) {
-      if (args.payer !== 'self' && args.payer !== 'family') return fail('Ask him first who pays: himself, or his family payer.');
-      const delegate = args.payer === 'family' ? await cathay.getDelegate(call.token) : null;
-      if (args.payer === 'family' && !delegate) return fail('No family payer is on file for him. Tell him that, and that the pay request can come to his own phone.');
-      call.payer = args.payer;
-      return recorded(call, cathay, delegate ? `${delegate.name.split(' ')[0]} will be asked to pay.` : 'You will pay yourself. The pay request will come to your own phone.');
-    },
-
     // Rules: two steps (read-back, then hold); only an option from this call; name, seat and meal from the profile.
     async hold_booking(args, call, cathay) {
       if (call.ref) return { ok: true, ref: call.ref, status: 'held', already_held: true };
@@ -435,72 +410,50 @@ export function createTools(deps) {
 
       const confirmed = yesNo(args.caller_confirmed) === true && call.pendingHold?.option_id === option.id;
       if (!confirmed) {
-        const payer = call.payer === 'family' ? (await cathay.getDelegate(call.token))?.name ?? null : null;   // null = he pays himself
-        call.pendingHold = { option_id: option.id, payer };
-        return { ok: true, needs_confirmation: true, readback: readback(option, profile, call.assistance, payer) };
+        call.pendingHold = { option_id: option.id };
+        return { ok: true, needs_confirmation: true, readback: readback(option, profile, call.assistance) };
       }
 
       const order = await cathay.holdOrder(call.token, {
         option_id: option.id, out: option.out, back: option.back, fare_hkd: option.fare_hkd,
         cabin: 'economy', seat: profile.prefs?.seat, meal: profile.prefs?.meal,
         ssr: call.assistance.code ? [call.assistance.code] : [],
-        payer: call.pendingHold.payer ?? titleCase(profile.name),
+        payer: titleCase(profile.name),   // the member always pays for his own booking
         passenger: profile.name,
       });
       call.ref = order.ref;
       call.order = order;
-      call.paysSelf = call.pendingHold.payer === null;
       emit(call.id, 'state', { ref: order.ref, status: 'held' });   // the projector's booking status
       call.pendingHold = null;
       tripPage(call);   // the trip page now belongs to this booking (and exists even if no text was sent)
       return {
         ok: true, ref: order.ref, ref_spoken: [...order.ref].join(' '), status: 'held',
-        say: 'Tell him the booking is held and read the reference letter by letter. Then ask if you may send the pay request now, and call send_pay_link only after he says yes.',
+        say: config.payment === 'page'
+          ? 'Tell him the booking is held and read the reference letter by letter. Then call send_pay_link.'
+          : 'Tell him the booking is held and read the reference letter by letter. Then ask if you may send the pay request now, and call send_pay_link only after he says yes.',
       };
     },
 
-    // Rule: only to the payer fixed at the read-back: the delegate on file with consent, or the caller's own number on file.
-    // The model cannot name a recipient.
-    async send_pay_link(_args, call, cathay) {
+    // Rule: the member pays for himself, only through his own trip page or his own number on file. The model cannot name a recipient.
+    async send_pay_link(_args, call) {
       if (!call.ref) return fail('There is no held booking yet. Hold the booking first.');
       if (call.payRequested) return { ok: true, sent_to: call.payRequested, already_sent: true };
-      // PAYMENT=page: the demo pay page for this booking's trip page (hold_booking created it); nobody replies PAY.
-      const payUrl = config.payment === 'page' && call.pageCode ? `${baseUrl}/pay/${call.pageCode}` : null;
-      if (call.paysSelf && payUrl) {
-        // His trip page (the link in his text) shows the Pay button to payUrl while the booking is held.
-        emit(call.id, 'screen', { what: 'pay_page', summary: 'Pay button on his trip page' });
+      if (config.payment === 'page') {
+        // His open trip page goes to the pay page by itself while the booking is held (server.js), so nothing is sent.
+        emit(call.id, 'screen', { what: 'pay_page', summary: 'payment page opens on his phone' });
         call.payRequested = 'his trip page';
         return {
           ok: true, sent_to: call.payRequested,
-          say: 'Tell him he can pay with the Pay button on his trip page, the link in the text we sent him. A text with his booking and his needs card comes as soon as it is paid. Then ask if there is anything else you can help with.',
+          say: 'Tell him the payment page is now open on his phone, on the page from our email, and he can choose how to pay there. An email with his booking comes as soon as it is paid. Stay on the line.',
         };
       }
-      if (call.paysSelf) {
-        // call.callerId IS the number on file (see text_options). shortcut: no email, the model-safe profile has none; text only.
-        await deps.messages.sendSms(call.callerId, deps.texts.payRequestSms(call.order, titleCase(call.order.passenger)));
-        emit(call.id, 'screen', { what: 'sms', summary: 'pay request text to the caller: "Reply PAY"' });
-        call.payRequested = 'his own phone';
-        return {
-          ok: true, sent_to: call.payRequested,
-          say: 'Tell him the pay request is on its way to his own phone and that he replies PAY to that text. A text with his booking and his needs card comes as soon as it is paid. Then ask if there is anything else you can help with.',
-        };
-      }
-      const delegate = await cathay.getDelegate(call.token);
-      if (!delegate) return fail('No family payer is on file for him. Say that a member of staff will call him about payment.');
-      const first = delegate.name.split(' ')[0];
-      const traveller = titleCase(call.order.passenger);
-      // PAYMENT=sms: no pay page, so the email tells him to reply PAY (payUrl null). PAYMENT=page: the email's Pay button opens payUrl.
-      const mail = deps.emails.payEmail({ order: call.order, travellerName: traveller, payerName: delegate.name, payUrl });
-      await deps.messages.sendEmail(delegate.email, mail.subject, mail.html, mail.text);
-      emit(call.id, 'screen', { what: 'pay_email', summary: `pay request email to ${first}` });
-      if (config.payment === 'sms') {
-        await deps.messages.sendSms(delegate.phone, deps.texts.payRequestSms(call.order, traveller));
-        emit(call.id, 'screen', { what: 'sms', summary: `pay request text to ${first}: "Reply PAY"` });
-      }
-      call.payRequested = first;
+      // call.callerId IS the number on file (see text_options). shortcut: no email, the model-safe profile has none; text only.
+      await deps.messages.sendSms(call.callerId, deps.texts.payRequestSms(call.order, titleCase(call.order.passenger)));
+      emit(call.id, 'screen', { what: 'sms', summary: 'pay request text to the caller: "Reply PAY"' });
+      call.payRequested = 'his own phone';
       return {
-        ok: true, sent_to: first,
-        say: `Tell him it went to ${first}, and that a text with his booking and his needs card will come as soon as it is paid. Then ask if there is anything else you can help with.`,
+        ok: true, sent_to: call.payRequested,
+        say: 'Tell him the pay request is on its way to his own phone and that he replies PAY to that text. A text with his booking and his needs card comes as soon as it is paid. Then ask if there is anything else you can help with.',
       };
     },
 

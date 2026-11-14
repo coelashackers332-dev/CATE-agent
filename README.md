@@ -14,11 +14,11 @@ The demo follows one caller, Mr Wong (74), who wants to visit family in Vancouve
 
 1. **Verify.** Mr Wong calls from his own phone. CATE matches the caller ID to his membership and asks one question from his travel history: "Where did you last fly with us?"
 2. **Say the trip.** "Vancouver after Chinese New Year, back before Ching Ming. Window seat, not too early."
-3. **Options.** CATE reads 2–3 options slowly, from the schedule and ranked by his profile, and offers to text them with a large-text link.
+3. **Options.** CATE reads up to 3 options, from the schedule and ranked by his profile, and sends one link (by email) to his trip page, where he can also tap the option he wants.
 4. **Assistance.** "Wheelchair to the gate, like Osaka?" CATE sets the IATA code (WCHR / WCHS / WCHC) from a fixed rule table and reads it back in plain words.
 5. **Read-back and hold.** CATE reads the whole trip back and holds the booking only after he says yes.
-6. **Family pays.** His son Daniel, linked to his profile, gets the pay request.
-7. **Booked.** Mr Wong gets a text with the booking reference and his needs card.
+6. **Pay.** Once the booking is held, his open trip page turns into the payment page. He picks a way to pay and sees "Payment successful".
+7. **Booked.** The page goes back to his trip, now booked, and he gets an email with the booking reference and his needs card.
 8. **Next time.** On his next call: "Same as your Vancouver trip?"
 
 ## Core rule: the AI talks, our code decides
@@ -60,8 +60,8 @@ Caller's phone ──► standby phone (the number Mr Wong calls)
 | Module contracts (`CONTRACTS.md`), configuration, event log, in-memory store, seed data | ✅ Done |
 | Mock Cathay systems + adapter, the booking tools and their rules | ✅ Done, tested |
 | Server: local phone line for the Bluetooth bridge, view-only pages, reset | ✅ Done, tested with real phone calls |
-| Screens: projector view, trip page with needs card (choose a flight and who pays by button during the call), texts, pay email, booked email | ✅ Done, tested |
-| Payment: demo pay page `/pay/<code>` (`PAYMENT=page`), from the pay email (family member) or the trip page (traveller); `POST /dev/pay` as a stage fallback | ✅ Done, tested |
+| Screens: projector view, trip page with needs card (choose a flight by button during the call), texts sent as email, booked email | ✅ Done, tested |
+| Payment: the member pays himself on the demo pay page `/pay/<code>` (`PAYMENT=page`), which his trip page opens by itself once the booking is held; `POST /dev/pay` as a stage fallback | ✅ Done, tested |
 | Scripted stand-in for the voice model (plays the golden path, no audio) | ✅ Done |
 | General Cathay questions (`ask_cathay`): search over passages in `knowledge/`, source shown on the projector | ✅ Tool and keyword search done, tested. The 23 passages are drafts, not yet verified against Cathay's pages. Search by meaning (embeddings) is planned. |
 | Voice model: Amazon Nova 2 Sonic over the call audio (`MODEL=nova`) | ✅ Done, run on real calls through Bedrock (Tokyo) |
@@ -106,7 +106,7 @@ To play the whole booking without a phone (`MODEL=scripted`), open the projector
 
 ```sh
 curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/simulate          # the call
-curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/pay               # Daniel pays (or open the pay link from his email)
+curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/pay               # the member pays (or pay on the page his trip link opens)
 curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/reset                 # start again
 ```
 

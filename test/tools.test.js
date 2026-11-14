@@ -65,8 +65,8 @@ const run = (name, args) => tools.runTool(name, args, call);
 const VANCOUVER = { to: 'Vancouver', after: '2027-02-06', before: '2027-04-05' };
 const verify = () => run('verify_caller', { answer: 'Osaka, last May' });
 
-test('specs: the 11 tools, each with a description and a JSON Schema', () => {
-  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'choose_option', 'set_preferences', 'set_assistance', 'set_payer', 'hold_booking', 'send_pay_link', 'ask_cathay']);
+test('specs: the 10 tools, each with a description and a JSON Schema', () => {
+  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'choose_option', 'set_preferences', 'set_assistance', 'hold_booking', 'send_pay_link', 'ask_cathay']);
   for (const s of tools.specs) {
     assert.ok(s.description.length > 40, s.name);
     assert.equal(s.inputSchema.type, 'object');
@@ -122,11 +122,9 @@ test('golden path: verify → profile → flights → text → assistance → ho
   const same = await run('set_assistance', { same_as_last_trip: true });
   assert.equal(same.code, 'WCHR');
   assert.deepEqual(call.assistance, { code: 'WCHR', summary: 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat.' });
-  assert.match(same.next, /Would you like to pay yourself, or shall I ask Daniel to pay\?/);
-  assert.match((await run('hold_booking', {})).error, /^Not yet\. .*pay yourself/, 'no read-back until he has said who pays');
-  const payer = await run('set_payer', { payer: 'family' });
-  assert.equal(payer.confirm, 'Daniel will be asked to pay.');
-  assert.match(payer.next, /call hold_booking now, in this same turn/);
+  // the member pays himself: nobody is asked who pays, the read-back comes next
+  assert.match(same.next, /call hold_booking now, in this same turn/);
+  assert.doesNotMatch(same.next, /Daniel|who pays/);
 
   // 6. hold: read-back first, then the hold
   const first = await run('hold_booking', { option_id: '1' });
@@ -135,8 +133,8 @@ test('golden path: verify → profile → flights → text → assistance → ho
   assert.equal(first.readback, 'Let me read it all back to you. Nothing is booked until you say yes. Booking for Wong Tak Ming. Hong Kong to Vancouver, flight CX0V1, Friday 19 February, leaving at 11:40 am. '
     + 'Coming back on flight CX0V2, Wednesday 31 March, leaving at 1:30 pm. Window seat, vegetarian meal. '
     + 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat. '
-    + 'The total is 8,420 Hong Kong dollars for the return trip. Daniel Wong will be asked to pay. Shall I hold this booking?');
-  assert.deepEqual(call.pendingHold, { option_id: '1', payer: 'Daniel Wong' });
+    + 'The total is 8,420 Hong Kong dollars for the return trip. The pay request will come to your own phone. Shall I hold this booking?');
+  assert.deepEqual(call.pendingHold, { option_id: '1' });
   assert.equal(store.orders.length, 1);
 
   const held = await run('hold_booking', { option_id: '1', caller_confirmed: true });
@@ -148,25 +146,25 @@ test('golden path: verify → profile → flights → text → assistance → ho
   assert.deepEqual(store.orders.at(-1), {
     ref: 'K7Q2XM', member_id: 'DEMO-0001', status: 'held', option_id: '1',
     out: found.options[0].out, back, fare_hkd: 8420,
-    cabin: 'economy', seat: 'window', meal: 'vegetarian', ssr: ['WCHR'], payer: 'Daniel Wong', passenger: 'WONG TAK MING',
+    cabin: 'economy', seat: 'window', meal: 'vegetarian', ssr: ['WCHR'], payer: 'Wong Tak Ming', passenger: 'WONG TAK MING',
   });
   assert.equal(store.pages.get(call.pageCode).ref, 'K7Q2XM');
   assert.equal((await run('hold_booking', { option_id: '2', caller_confirmed: true })).ref, 'K7Q2XM', 'one hold per call');
   assert.equal(store.orders.length, 2);
 
-  // 7. pay request: only to the delegate on file
-  assert.deepEqual(await run('send_pay_link', { to: 'someone@else.example' }), { ok: true, sent_to: 'Daniel', say: 'Tell him it went to Daniel, and that a text with his booking and his needs card will come as soon as it is paid. Then ask if there is anything else you can help with.' });
-  assert.deepEqual(sent.email, [{ to: daniel.email, subject: 'Pay K7Q2XM', html: '<p>Daniel Wong</p>', text: 'Wong Tak Ming null'   /* PAYMENT=sms: no pay page, the email says reply PAY */ }]);
-  if (config.payment === 'sms') assert.deepEqual(sent.sms.at(-1), { to: daniel.phone, body: 'PAYREQ K7Q2XM Wong Tak Ming' });
+  // 7. pay request (PAYMENT=sms): only to his own number on file, whatever the model passes; nothing to the family
+  assert.equal((await run('send_pay_link', { to: 'someone@else.example' })).sent_to, 'his own phone');
+  assert.deepEqual(sent.sms.at(-1), { to: wong.phone, body: 'PAYREQ K7Q2XM Wong Tak Ming' });
+  assert.equal(sent.email.length, 0);
   assert.equal((await run('send_pay_link', {})).already_sent, true);
-  assert.equal(sent.email.length, 1);
+  assert.equal(sent.sms.length, 2);
 
   // events: one tool_call + one tool_result per run, system lines from the adapter, screens from the tools
   const kinds = (k) => events.filter((e) => e.kind === k);
   assert.equal(kinds('tool_call').length, kinds('tool_result').length);
-  assert.equal(kinds('tool_call').length, 14);
+  assert.equal(kinds('tool_call').length, 12);
   assert.deepEqual(kinds('tool_call')[3].args, {}, 'undeclared inputs are dropped');
-  assert.deepEqual(kinds('screen').map((e) => e.what), config.payment === 'sms' ? ['sms', 'options_page', 'pay_email', 'sms'] : ['sms', 'options_page', 'pay_email']);
+  assert.deepEqual(kinds('screen').map((e) => e.what), ['sms', 'options_page', 'sms']);
   assert.ok(events.every((e) => e.call_id === 'c1'));
   assert.ok(kinds('system').some((e) => e.summary === 'K7Q2XM · WCHR'));
   const text = JSON.stringify(events);
@@ -355,7 +353,7 @@ test('ask_cathay: answers only from passages, says so when there are none, and n
   assert.equal((await bare.runTool('ask_cathay', { question: 'bags?' }, call)).found, false);
 });
 
-test('the caller can choose to pay himself: said back at once, in the read-back, and the pay request goes to his own phone', async () => {
+test('the member always pays himself: no who-pays question, no set_payer tool, nothing to the family payer', async () => {
   await verify();
   await run('find_flights', VANCOUVER);
   await run('choose_option', { option_id: '1' });
@@ -363,17 +361,9 @@ test('the caller can choose to pay himself: said back at once, in the read-back,
   const change = await run('set_preferences', { seat_ok: true, meal_ok: false });
   assert.equal(change.confirm, 'I will keep the window seat. On this call I can only book the vegetarian meal on your membership. A member of staff can change the meal after booking.');
   await run('set_assistance', { same_as_last_trip: true });
-  assert.equal((await run('set_payer', { payer: 'my daughter' })).ok, false);
-  const self = await run('set_payer', { payer: 'self' });
-  assert.equal(self.confirm, 'You will pay yourself. The pay request will come to your own phone.');
+  assert.equal((await run('set_payer', { payer: 'family' })).ok, false, 'there is no set_payer tool any more');
   const first = await run('hold_booking', {});
   assert.match(first.readback, /The pay request will come to your own phone\. Shall I hold this booking\?$/);
-  // changing the payer after the read-back needs a new read-back, not a hold
-  await run('set_payer', { payer: 'family' });
-  const changed = await run('hold_booking', { caller_confirmed: true });
-  assert.match(changed.readback, /Daniel Wong will be asked to pay/);
-  await run('set_payer', { payer: 'self' });
-  await run('hold_booking', {});
   const held = await run('hold_booking', { caller_confirmed: true });
   assert.equal(held.ref, 'K7Q2XM');
   assert.equal(store.orders.at(-1).payer, 'Wong Tak Ming');
@@ -408,31 +398,20 @@ test('cities: every airport in the schedule is known by its city name, and commo
   assert.match((await run('find_flights', { to: 'Atlantis', after: '2026-11-20', before: '2026-12-10' })).error, /We have no flights for/);
 });
 
-test('PAYMENT=page: the pay email carries the pay page, no "Reply PAY" text; a self-payer is sent to his trip page', async () => {
+test('PAYMENT=page: the read-back says the payment page opens, the hold goes straight on to it, and nothing is sent', async () => {
   config.payment = 'page';
-  const book = async (payer) => {
-    await verify();
-    await run('find_flights', VANCOUVER);
-    await run('choose_option', { option_id: '1' });
-    await run('set_preferences', { seat_ok: true, meal_ok: true });
-    await run('set_assistance', { same_as_last_trip: true });
-    await run('set_payer', { payer });
-    await run('hold_booking', {});
-    return run('hold_booking', { caller_confirmed: true });
-  };
-  await book('family');
+  await verify();
+  await run('find_flights', VANCOUVER);
+  await run('choose_option', { option_id: '1' });
+  await run('set_preferences', { seat_ok: true, meal_ok: true });
+  await run('set_assistance', { same_as_last_trip: true });
+  assert.match((await run('hold_booking', {})).readback, /Once it is held, the payment page opens on your phone\. Shall I hold this booking\?$/);
+  const held = await run('hold_booking', { caller_confirmed: true });
+  assert.match(held.say, /Then call send_pay_link\.$/, 'no "may I send it?" question');
   const smsBefore = sent.sms.length;
-  assert.equal((await run('send_pay_link', {})).sent_to, 'Daniel');
-  assert.equal(sent.email.at(-1).text, `Wong Tak Ming ${BASE_URL}/pay/${call.pageCode}`);
-  assert.equal(sent.sms.length, smsBefore, 'no "Reply PAY" text');
-
-  store.reset({ log: false });
-  call = newCall();
-  sent = { sms: [], email: [] };
-  await book('self');
-  const self = await run('send_pay_link', {});
-  assert.equal(self.sent_to, 'his trip page');
-  assert.match(self.say, /Pay button on his trip page/);
+  const pay = await run('send_pay_link', {});
+  assert.equal(pay.sent_to, 'his trip page');
+  assert.match(pay.say, /payment page is now open on his phone/);
   assert.equal(sent.email.length, 0);
-  assert.ok(!sent.sms.some((m) => m.body.startsWith('PAYREQ')));
+  assert.equal(sent.sms.length, smsBefore, 'no "Reply PAY" text');
 });

@@ -207,7 +207,19 @@ test('GET /v/:code: page with privacy headers; unknown and expired codes are the
 
   // The page follows the booking: once the order is paid, the same link renders from the new state.
   store.pages.get('good-code').ref = holdOrder();
-  assert.equal(await (await get('/v/good-code')).text(), 'TRIP DEMO-0001 held 2');
+  const mode = config.payment;
+  try {
+    config.payment = 'sms';
+    assert.equal(await (await get('/v/good-code')).text(), 'TRIP DEMO-0001 held 2');
+    // PAYMENT=page: while the booking is held, the trip page sends the member straight to his pay page
+    config.payment = 'page';
+    const held = await fetch(base + '/v/good-code', { redirect: 'manual' });
+    assert.equal(held.status, 303);
+    assert.equal(held.headers.get('location'), '/pay/good-code');
+    assert.equal(held.headers.get('cache-control'), 'no-store');
+  } finally {
+    config.payment = mode;
+  }
   assert.equal((await post('/v/good-code')).status, 404, 'read-only');
 });
 
@@ -225,11 +237,10 @@ test('POST /v/:code: answer buttons run the call\'s own tools only while that ca
     const chose = await form('/v/live-code', 'option=2');
     assert.equal(chose.status, 303);
     assert.equal(chose.headers.get('location'), '/v/live-code');
-    await form('/v/live-code', 'payer=family');
+    await form('/v/live-code', 'payer=family');      // nobody else pays any more: ignored
     await form('/v/live-code', 'option=9');          // not one of his options: ignored
-    await form('/v/live-code', 'payer=someone');     // not an answer: ignored
-    assert.deepEqual(ran, [['choose_option', { option_id: '2' }], ['set_payer', { payer: 'family' }]]);
-    assert.equal(notes.length, 2);
+    assert.deepEqual(ran, [['choose_option', { option_id: '2' }]]);
+    assert.equal(notes.length, 1);
     assert.match(notes[0], /chose flight 2 with the button on his trip page/);
     // another page's code, an unverified call, or a held booking: read-only again
     assert.equal((await form('/v/good-code', 'option=1')).status, 404);
@@ -240,7 +251,7 @@ test('POST /v/:code: answer buttons run the call\'s own tools only while that ca
     assert.equal((await form('/v/live-code', 'option=1')).status, 404);
     store.activeCall.ref = null;
     assert.equal((await form('/v/live-code', 'x='.padEnd(3000, 'a'))).status, 413);
-    assert.equal(ran.length, 2);
+    assert.equal(ran.length, 1);
   } finally {
     deps.tools.runTool = realRun;
     store.activeCall = null;

@@ -10,7 +10,7 @@ The voice model can only listen, talk, and choose one of the 8 tools on this pag
 | 4 | [`text_options`](#4-text_options) | Texts the options and a view-only trip page link to the caller |
 | 5 | [`set_assistance`](#5-set_assistance) | Sets the wheelchair code from a fixed table |
 | 6 | [`hold_booking`](#6-hold_booking) | Reads the trip back, then holds the booking after a yes |
-| 7 | [`send_pay_link`](#7-send_pay_link) | Sends the pay request to the family member on file |
+| 7 | [`send_pay_link`](#7-send_pay_link) | Opens the payment page on the member's own phone (the member always pays himself) |
 | 8 | [`ask_cathay`](#8-ask_cathay) | Answers a general question about flying with Cathay, from checked passages only |
 
 The usual order in a call is 1 → 2 → 3 → 4 (optional) → 5 → 6 (twice) → 7. Tool 8 can be called at any point after verification, whenever the caller asks a general question.
@@ -205,20 +205,19 @@ Holds the booking, in two steps, so nothing is held before the caller has heard 
 |---|---|---|---|
 | `option_id` | string | yes | The id of the chosen option from `find_flights` |
 | `caller_confirmed` | boolean | no | True only after he said yes to the read-back |
-| `payer` | `self` or `family` | no | Who pays, as the caller chose. Left out: the family payer if one is on file, otherwise the caller |
 
 **Step 1: the read-back.** Called with `option_id` only:
 
 ```json
 { "ok": true, "needs_confirmation": true,
-  "readback": "Let me read it all back to you. Nothing is booked until you say yes. Booking for Wong Tak Ming. Hong Kong to Vancouver, flight CX0V1, Friday 19 February, leaving at 11:40 am. Coming back on flight CX0V2, Wednesday 31 March, leaving at 1:30 pm. Window seat, vegetarian meal. Wheelchair from check-in to the gate. Can manage stairs and walk to the seat. The total is 8,420 Hong Kong dollars for the return trip. Daniel Wong will be asked to pay. Shall I hold this booking?" }
+  "readback": "Let me read it all back to you. Nothing is booked until you say yes. Booking for Wong Tak Ming. Hong Kong to Vancouver, flight CX0V1, Friday 19 February, leaving at 11:40 am. Coming back on flight CX0V2, Wednesday 31 March, leaving at 1:30 pm. Window seat, vegetarian meal. Wheelchair from check-in to the gate. Can manage stairs and walk to the seat. The total is 8,420 Hong Kong dollars for the return trip. The pay request will come to your own phone. Shall I hold this booking?" }
 ```
 
 **Step 2: the hold.** Called again with the same `option_id` and `caller_confirmed: true`:
 
 ```json
 { "ok": true, "ref": "K7Q2XM", "ref_spoken": "K 7 Q 2 X M", "status": "held",
-  "say": "Tell him the booking is held and read the reference letter by letter. Then ask if the pay request may go to his family payer, and call send_pay_link only after he says yes." }
+  "say": "Tell him the booking is held and read the reference letter by letter. Then call send_pay_link." }
 ```
 
 **Rules in code**
@@ -241,31 +240,29 @@ Holds the booking, in two steps, so nothing is held before the caller has heard 
 
 ## 7. `send_pay_link`
 
-Sends the pay request to the family member linked to the membership. Call it after the booking is held.
+Opens the payment for the held booking on the member's own phone. The member always pays for his own booking. Call it right after the hold.
 
 **Input:** none. The model cannot name a recipient.
 
 **Returns**
 
 ```json
-{ "ok": true, "sent_to": "Daniel",
-  "say": "Tell him it went to Daniel, and that a text with his booking and his needs card will come as soon as it is paid. Then ask if there is anything else you can help with." }
+{ "ok": true, "sent_to": "his trip page",
+  "say": "Tell him the payment page is now open on his phone, on the page from our email, and he can choose how to pay there. An email with his booking comes as soon as it is paid. Stay on the line." }
 ```
 
 **Rules in code**
 
-- The request goes only to the payer the caller chose at the read-back: the family member on file who has given consent (email and phone on file), or the caller's own phone on file (text only).
-- The model gets back only the first name.
-- With `PAYMENT=sms` (current), the family member gets an email and a text saying "Reply PAY". With `PAYMENT=stripe` (planned), the email carries a Stripe test checkout link instead.
+- Only to the member himself: with `PAYMENT=page` (the demo) his open trip page goes to the pay page `/pay/<code>` by itself while the booking is held, so nothing is sent. With `PAYMENT=sms` the pay request goes as a text to his own number on file ("Reply PAY").
+- Nobody else can be asked to pay, and the model cannot name a recipient.
 - Calling again does not send a second request (`already_sent: true`).
-- The tool returns at once. Payment arrives later: when it does, the booking moves from `held` to `paid`, the caller gets text 2 (booking reference and needs card), and the live call is told "Daniel has paid for booking K7Q2XM".
+- The tool returns at once. Payment arrives later: when it does, the booking moves from `held` to `paid`, the member gets the booked email (booking reference and needs card), and the live call is told that the payment arrived.
 
 **Refusals**
 
 | When | The model is told |
 |---|---|
 | No held booking | Hold the booking first. |
-| No family payer on file | Say that a member of staff will call him about payment. |
 
 ## 8. `ask_cathay`
 

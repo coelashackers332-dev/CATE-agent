@@ -16,7 +16,7 @@ const until = async (check, what) => {
   assert.fail(`timed out waiting for ${what}`);
 };
 
-test('golden path: scripted call, Daniel pays, confirmed trip page', async () => {
+test('golden path: scripted call, the member pays, confirmed trip page', async () => {
   store.reset({ log: false });
   const events = [];
   const onEvent = (ev) => events.push(ev);
@@ -47,7 +47,7 @@ test('golden path: scripted call, Daniel pays, confirmed trip page', async () =>
     const pay = await fetch(`${base}/dev/pay`, { method: 'POST', headers: admin });
     assert.deepEqual(await pay.json(), { ok: true, ref: 'K7Q2XM' });
     assert.equal(order.status, 'paid');
-    await until(() => events.some((e) => e.kind === 'cate_said' && /has paid/.test(e.text)), 'CATE saying Daniel paid');
+    await until(() => events.some((e) => e.kind === 'cate_said' && /has paid/.test(e.text)), 'CATE saying the payment arrived');
 
     const paid = await (await fetch(`${base}/v/${code}`)).text();
     assert.match(paid, /K7Q2XM/);
@@ -57,7 +57,7 @@ test('golden path: scripted call, Daniel pays, confirmed trip page', async () =>
     // Tools ran in the order the rules require.
     const tools = events.filter((e) => e.kind === 'tool_call').map((e) => e.name);
     assert.deepEqual(tools, ['verify_caller', 'apply_profile', 'find_flights', 'text_options',
-      'choose_option', 'set_preferences', 'set_assistance', 'set_payer', 'hold_booking', 'hold_booking', 'send_pay_link']);
+      'choose_option', 'set_preferences', 'set_assistance', 'hold_booking', 'hold_booking', 'send_pay_link']);
     // No phone number or email address ever reaches the projector.
     const feed = JSON.stringify(events);
     assert.doesNotMatch(feed, /\+852\d{8}/);

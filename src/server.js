@@ -66,16 +66,17 @@ export function createApp(deps) {
     const page = store.pages.get(code);
     const order = page.ref ? findOrder(page.ref) : null;
     const profile = findMember(page.member_id);
-    // PAYMENT=page: a traveller who pays himself gets a Pay button to the demo pay page while his booking is held.
+    // PAYMENT=page: the member pays for himself. While his booking is held, his trip page IS the pay page: an open
+    // page (it checks every few seconds during the call) goes there by itself. Once paid, the trip page shows the booking.
     const payUrl = config.payment === 'page' ? `/pay/${code}` : null;
-    // While his call is live, the page also takes his answers by button (which flight, who pays).
+    if (payUrl && order?.status === 'held') return res.writeHead(303, { Location: payUrl, ...PRIVATE }).end();
+    // While his call is live, the page also takes his flight choice by button. No "who pays" buttons: family: ''.
     const call = askingCall(code);
-    const delegate = profile?.delegates?.find((d) => d.consent);
-    const live = call ? { choice: call.choice ?? null, payer: call.payer ?? null, family: delegate?.name.split(' ')[0] ?? '' } : null;
+    const live = call ? { choice: call.choice ?? null, payer: null, family: '' } : null;
     html(res, 200, renderTripPage({ page, order, profile, now: Date.now(), payUrl, live }));
   }
 
-  /** POST /v/:code: an answer button on the trip page (option=<id> or payer=self|family), run as the same tool the call uses. */
+  /** POST /v/:code: an answer button on the trip page (option=<id>), run as the same tool the call uses. */
   // Without a live call that is still asking, the page is read-only: the same 404 as an unknown code.
   async function tripAnswer(req, res, code) {
     const call = livePage(code) ? askingCall(code) : null;
@@ -87,14 +88,10 @@ export function createApp(deps) {
     }
     const form = new URLSearchParams(body);
     const option = form.get('option');
-    const payer = form.get('payer');
     // The model is told what was pressed, so the call and the page stay one conversation.
     if (option && call.options.some((o) => String(o.id) === option)) {
       const r = await tools.runTool('choose_option', { option_id: option }, call);
       if (r.ok) call.session?.notify?.(`He just chose flight ${option} with the button on his trip page. ${r.confirm ?? ''} Say that back to him and go on.`);
-    } else if (payer === 'self' || payer === 'family') {
-      const r = await tools.runTool('set_payer', { payer }, call);
-      if (r.ok) call.session?.notify?.(`He just answered who pays with the button on his trip page. ${r.confirm ?? ''} Say that back to him and go on.`);
     }
     res.writeHead(303, { Location: `/v/${code}`, ...PRIVATE }).end();
   }

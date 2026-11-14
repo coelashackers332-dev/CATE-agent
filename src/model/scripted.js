@@ -44,7 +44,6 @@ export function startSession({ call, runTool, emit }) {
       () => say('Wheelchair to the gate, like your Osaka trip?'),
       () => hear('Yes, please.'),
       async () => { const a = await tool('set_assistance', { same_as_last_trip: true }); say(a.summary); },
-      async () => { say((await tool('set_payer', { payer: 'family' })).confirm); },
       async () => {
         const first = await tool('hold_booking', {});
         for (const line of lines(first.readback)) say(line);
@@ -57,7 +56,7 @@ export function startSession({ call, runTool, emit }) {
       },
       async () => {
         const sent = await tool('send_pay_link');
-        say(`I've sent the pay request to ${sent.sent_to}. I'll stay on the line.`);
+        say(sent.sent_to === 'his trip page' ? "The payment page is now open on your phone. I'll stay on the line." : `I've sent the pay request to ${sent.sent_to}. I'll stay on the line.`);
       },
     ];
     for (const step of script) {
