@@ -43,7 +43,7 @@
   .line { display: flex; flex-wrap: wrap; gap: 0 .9em; align-items: baseline; padding: .45em 0; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: clamp(15px, 1.2vw, 24px); line-height: 1.35; }
   .line .name { font-weight: 700; color: var(--jade-900); }
   .line .what { overflow-wrap: anywhere; }
-  .line .res { margin-left: auto; text-align: right; overflow-wrap: anywhere; }
+  .line .res { margin-left: auto; overflow-wrap: anywhere; }
   .line .res.ok { color: var(--ok); }
   .line .res.bad { color: var(--bad); }
   .line.tool { color: var(--muted); }
@@ -54,7 +54,7 @@
   @keyframes in { from { opacity: 0; transform: translateY(6px); } }
   @media (prefers-reduced-motion: reduce) { .turn, .line { animation: none; } }
 
-  footer { padding: .8vh 2vw 1vh; font-size: clamp(13px, .95vw, 19px); color: var(--muted); display: flex; gap: 2vw; justify-content: space-between; }
+  footer { padding: .8vh 2vw 1vh; font-size: clamp(18px, 1.4vw, 28px); color: var(--muted); display: flex; gap: 2vw; justify-content: space-between; }
 </style>
 </head>
 <body>
@@ -98,12 +98,14 @@
   function pill(id, text, cls) { $(id).textContent = text; $(id).className = 'pill' + (cls ? ' ' + cls : ''); }
   const cut = (s, n = 160) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
+  // Instructions to the model and text CATE reads out (already on the left) are noise on this side.
+  const HIDE = new Set(['ok', 'say', 'next', 'readback', 'read_out', 'return_flight']);
   // One short line from tool args or a tool result: "to: YVR · after: 2027-02-06", "options: 3 items".
   function brief(v) {
     if (v == null) return '';
     if (typeof v !== 'object') return String(v);
     if (Array.isArray(v)) return v.length + (v.length === 1 ? ' item' : ' items');
-    return Object.entries(v).filter(([k]) => k !== 'ok').map(([k, x]) => k + ': ' + (x !== null && typeof x === 'object' ? brief(Array.isArray(x) ? x : '{…}') : x)).join(' · ');
+    return Object.entries(v).filter(([k]) => !HIDE.has(k)).map(([k, x]) => k + ': ' + (x !== null && typeof x === 'object' ? brief(Array.isArray(x) ? x : '{…}') : x)).join(' · ');
   }
 
   function line(cls, name, what, res, ok) {

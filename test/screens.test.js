@@ -66,6 +66,7 @@ test('confirmed: reference, both flights, seat, meal, assistance, needs card', (
     assert.ok(html.includes(t), `missing ${t}`);
   }
   assert.ok(html.includes(SAFE));
+  assert.ok(html.indexOf('show this card to staff') < html.indexOf('Your flights'), 'the needs card comes before the flights');
 });
 
 test('needs card: plain words + code for each wheelchair code', () => {

@@ -245,6 +245,7 @@ function confirmedState(order, profile) {
     `You're booked to ${city}`,
     `${order.payer ? `${firstName(order.payer)} paid. ` : ''}Booking reference ${order.ref}.`,
   )}
+${needsCard(order, profile)}
 <div class="sec">
   <h2>Your flights</h2>
   ${leg('Going', order.out, homeCity(order))}
@@ -260,7 +261,6 @@ function confirmedState(order, profile) {
     ${fact('Price', `${money(order.fare_hkd)} return (illustrative fare)`)}
   </dl>
 </div>
-${needsCard(order, profile)}
 ${footer()}`);
 }
 
