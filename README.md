@@ -1,37 +1,41 @@
 # CATE: Cathay Automated Travel Expert
 
-Book a Cathay flight by phone call, with no app, no forms and no codes.
+A personal booking manager for Gold and Diamond members, on the Cathay phone line.
 
-CATE is a voice assistant for travellers who find online booking hard: older travellers, and people with visual, cognitive or communication needs. The traveller calls a phone number and says their trip and their needs once, in their own words. CATE finds the flights, sets the wheelchair assistance, reads everything back, and holds the booking. A family member pays through a link sent to them. The traveller gets the booking and a "needs card" by text, to show staff at check-in, immigration and the gate.
+**The problem: personal service stops at the top tier.** What premium members value most is someone who knows them, so only the top tiers (Diamond Exec and above) get a Relationship Manager. Gold and Diamond members, the large group of high-value flyers just below, get the same app, forms and queue as everyone else. Every trip they repeat the same seat, meal, baggage and details, and anything beyond a simple booking means the hotline, a wait and explaining from the start. A member with a disability explains their needs again at every booking.
 
-Built for **Cathay Hackathon 2026**, challenge *Premium Travel: Making Travel More Accessible*, by team **E332 Coelas Hackers**.
+**CATE** (Cathay Automated Travel Expert) answers the call, already knows the member, and books and manages the trip in one call. It fills in name, passport, seat, meal and baggage from the profile and past trips, so nothing is asked twice, and it remembers needs such as a wheelchair as the right airport service code. Accessibility is part of personalisation: a member who needs help describes it once. CATE handles the routine; people handle the exceptions.
 
-> **Status: working prototype.** A real phone call to the standby phone is answered automatically, Amazon Nova 2 Sonic talks with the caller, and the booking, texts (sent as email), pay page and booked confirmation run end to end on Cathay's real schedule (OAG). The [Status](#status) table below shows what exists.
+Built for **Cathay Hackathon 2026**, theme *Premium Travel*, by team **E332 Coelas Hackers**.
+
+> **Status: working prototype.** A real phone call is answered on the laptop, Amazon Nova 2 Sonic talks with the caller, and the booking, the trip page sent by email, the pay page and the booked confirmation run end to end on Cathay's real schedule (OAG). The [Status](#status) table below shows what exists.
 
 ## How a call works
 
-The demo follows one caller, Mr Wong (74), who wants to visit family in Vancouver:
+The demo follows Mr Wong, a Gold member who flew to Osaka in May with a wheelchair to the gate:
 
-1. **Verify.** Mr Wong calls from his own phone. CATE matches the caller ID to his membership and asks one question from his travel history: "Where did you last fly with us?"
-2. **Say the trip.** "Vancouver after Chinese New Year, back before Ching Ming. Window seat, not too early."
-3. **Options.** CATE reads up to 3 options, from the schedule and ranked by his profile, and sends one link (by email) to his trip page, where he can also tap the option he wants.
-4. **Assistance.** "Wheelchair to the gate, like Osaka?" CATE sets the IATA code (WCHR / WCHS / WCHC) from a fixed rule table and reads it back in plain words.
-5. **Read-back and hold.** CATE reads the whole trip back and holds the booking only after he says yes.
-6. **Pay.** Once the booking is held, his open trip page turns into the payment page. He picks a way to pay and sees "Payment successful".
-7. **Booked.** The page goes back to his trip, now booked, and he gets an email with the booking reference and his needs card.
-8. **Next time.** On his next call: "Same as your Vancouver trip?"
-
+1. **Verify and check the tier.** Mr Wong calls from his own phone. CATE matches the caller ID to his membership and asks one question from his travel history: "Where did you last fly with us?" CATE serves Gold members and above, and any member with a registered assistance need.
+2. **Which service?** Book a flight, change a booking (dates, seat, meal, baggage), or a special request.
+3. **Say the trip.** "Osaka again, after Christmas, back before New Year."
+4. **Options.** CATE reads up to 3 options from the schedule, ranked by his profile (he never leaves before 9:00), and emails one link to his trip page, where he can tap the option he wants.
+5. **Seat, meal, assistance, baggage, requests.** "Your membership has a window seat near the front and a vegetarian meal. Still right?" He can ask for seat 21A instead. "Wheelchair to the gate, like Osaka?" One extra bag. "It's my wife's birthday on the 26th": noted for the crew. Name and passport come from his profile; nothing is asked again.
+6. **Read-back and hold.** CATE reads the whole trip back, with the total, and holds the booking only after he says yes.
+7. **Pay.** His open trip page turns into the payment page (Visa, Mastercard, Apple Pay, FPS and others). He pays and sees "Payment successful".
+8. **Booked.** The page goes back to his trip, now booked, and he gets an email with the booking reference and his needs card for airport staff.
+9. **Change it later.** On a later call: "Move my Osaka trip to the 28th", "Make it an aisle seat", "Add a bag." CATE reads the change back and any difference in price opens on the same payment page.
 ## Core rule: the AI talks, our code decides
 
 The voice model only listens, talks and chooses which tool to call. Every action that matters runs as a tool in our code, with its rule enforced there:
 
-- **Names** come from the verified member profile, never from speech, so the ticket matches the passport.
+- **Names and passport** come from the verified member profile, never from speech, so the ticket matches the passport. The passport number never reaches the model.
+- **Who gets CATE** (Gold and above, or a registered assistance need) is checked in code after verification.
+- **Seats, meals, baggage and fees** come from fixed lists and the Orders system; a seat number must exist on our planes.
 - **Flights and fares** come from our data. The model can't invent a flight or a price.
 - **Wheelchair codes** come from a fixed rule table, not from the model's judgement.
 - **Nothing about the member** reaches the model before verification passes, and the model never sees the correct verification answer.
 - **General Cathay answers** come only from checked passages, each with its source. With no relevant passage, CATE says it does not have that information and offers a member of staff.
 
-The 8 tools, with their inputs, results and rules, are documented in [`docs/TOOLS.md`](docs/TOOLS.md).
+The 14 tools, with their inputs, results and rules, are documented in [`docs/TOOLS.md`](docs/TOOLS.md).
 
 ## Architecture
 
@@ -67,6 +71,9 @@ Caller's phone ──► standby phone (the number Mr Wong calls)
 | Voice model: Amazon Nova 2 Sonic over the call audio (`MODEL=nova`) | ✅ Done, run on real calls through Bedrock (Tokyo) |
 | Live email, texts sent as email (`TEXTS=email`) | ✅ Done, tested |
 | Real schedules (OAG snapshot): every Cathay route from Hong Kong, November–December 2026 | ✅ Done |
+| Personal booking manager (game plan 15 Nov): tier gate, "which service?", seat by side, cabin area or number, meal choice, extra baggage, special requests, passport from the profile | ✅ Done, tested |
+| Manage a booking: change dates, seat, meal or baggage; a higher price opens the payment page for the difference | ✅ Done, tested |
+| Cancellations, upgrades, refunds of a lower fare | Next: handled by staff for now |
 | Real card checkout (Stripe or Cathay's payment gateway) | Planned for production |
 
 ## Repo layout

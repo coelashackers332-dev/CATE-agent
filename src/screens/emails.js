@@ -1,7 +1,7 @@
 // Email wording. Mail apps remove style sheets and scripts, so: inline styles only, one column,
 // text of 20 px or more, high contrast, text as text (no images). Colours follow Cathay's site.
 // There is no SMS: the traveller gets his trip link (tripEmail) and his booking (bookedEmail) by email.
-import { esc, fmtDay, fmtTime, money, needWords, tripCity, homeCity } from './trip.js';
+import { esc, fmtDay, fmtTime, money, needWords, tripCity, homeCity, seatText, bagsText } from './trip.js';
 
 const INK = '#2d2d2d', MUTED = '#595b5d', JADE = '#005d63', GO = '#2c4036';
 const P = `margin:0 0 16px;font-size:20px;line-height:1.5;color:${INK};`;
@@ -111,7 +111,12 @@ export function bookedEmail({ order, profile, link }) {
     ['Passenger', order.passenger],
     ['Going', `${fmtDay(order.out?.dep)}, ${fmtTime(order.out?.dep)}, ${homeCity(order)} to ${city}, flight ${order.out?.flight}`],
     ['Coming back', `${fmtDay(order.back?.dep)}, ${fmtTime(order.back?.dep)}, flight ${order.back?.flight}`],
-    ['Seat and meal', [order.seat && `${cap(order.seat)} seat`, order.meal && `${cap(order.meal)} meal`].filter(Boolean).join(', ')],
+    ['Seat', seatText(order)],
+    ['Meal', order.meal && `${cap(order.meal)}`],
+    ['Extra baggage', bagsText(order)],
+    ['Noted for staff', (order.requests ?? []).join('; ')],
+    ['Passport', order.passport],
+    ['Price', order.total_hkd != null ? `${money(order.total_hkd)} return` : ''],
   ].filter(([, v]) => v);
   const lede = `${paid}. Your booking reference is ${order.ref}.`;
   const show = 'At the airport, show this to staff:';

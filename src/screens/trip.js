@@ -53,6 +53,10 @@ export const homeCity = (t) => t?.back?.city ?? t?.out?.from ?? '';
 
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0];
 const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : '');
+/** "21A", "Window, front of the cabin", "Aisle": the value next to a "Seat" label. */
+export const seatText = (o) => (o.seat_number ? o.seat_number : [cap(o.seat), o.seat_area && `${o.seat_area} of the cabin`].filter(Boolean).join(', '));
+/** "1 extra checked bag", or '' for none. */
+export const bagsText = (o) => (o.extra_bags ? `${o.extra_bags} extra checked bag${o.extra_bags === 1 ? '' : 's'}` : '');
 
 function passengerName(order, profile) {
   if (order?.passenger) return order.passenger;
@@ -296,7 +300,7 @@ function optionsState(page, order, payUrl, live) {
     <span class="dot" aria-hidden="true">…</span>
     <p><b>${other ? `Waiting for ${esc(other)} to pay` : payHref ? 'Pay to confirm your booking' : 'Waiting for payment'}</b>Option ${esc(held.option_id)} is held under booking reference ${esc(held.ref)}. ${how}</p>
   </div>${payHref ? `
-  <a class="pay" href="${esc(payHref)}">Pay ${esc(money(held.fare_hkd))}</a>
+  <a class="pay" href="${esc(payHref)}">Pay ${esc(money(held.due_hkd ?? held.total_hkd ?? held.fare_hkd))}</a>
   <p class="soft paynote">Test payment for this prototype. No real money moves.</p>` : ''}
 </div>` : '';
 
@@ -364,10 +368,13 @@ ${needsCard(order, profile)}
   <dl class="facts">
     ${fact('Passenger', passengerName(order, profile))}
     ${fact('Booking', order.ref)}
-    ${fact('Seat', cap(order.seat))}
+    ${fact('Seat', seatText(order))}
     ${fact('Meal', cap(order.meal))}
     ${fact('Help', help)}
-    ${fact('Price', `${money(order.fare_hkd)} return (illustrative fare)`)}
+    ${fact('Extra baggage', bagsText(order))}
+    ${fact('Noted for staff', (order.requests ?? []).join('; '))}
+    ${fact('Passport', order.passport)}
+    ${fact('Price', `${money(order.total_hkd ?? order.fare_hkd)} return (illustrative fare)`)}
   </dl>
 </div>
 ${footer()}`);

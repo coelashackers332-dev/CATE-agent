@@ -78,8 +78,10 @@ The 7 tools and their rules are in `STACK.md` §4. Rules live in code, not in th
 // order (a hold made by hold_booking; same array as the seeded flown orders)
 { ref: "K7Q2XM", member_id: "DEMO-0001", status: "held" | "paid" | "ended",
   option_id: "1", out: segment, back: segment, fare_hkd: 8420,
-  cabin: "economy", seat: "window", meal: "vegetarian", ssr: ["WCHR"], payer: "Daniel Wong",
-  passenger: "WONG TAK MING" }
+  cabin: "economy", seat: "window", seat_area: "front", seat_number?: "21A", meal: "vegetarian",
+  extra_bags: 1, extras_hkd: 500, total_hkd: 8920, due_hkd: 8920,   // due = what the pay page charges (only the difference after a change)
+  requests: ["His wife's birthday on 26 December"], passport: "HKG passport ending 478",
+  ssr: ["WCHR"], payer: "Wong Tak Ming", passenger: "WONG TAK MING" }
 ```
 
 Golden-path expectation from the seed data (`DATA.md` §5): Vancouver, out after 2027-02-06, back before 2027-04-05, earliest departure 09:00 → 3 options: 11:40 HKD 8,420 · 23:50 HKD 7,960 · 09:10 via Tokyo HKD 6,900; return 31 Mar 13:30. The 06:30 flight is filtered as too early.
@@ -99,10 +101,13 @@ export function createCathay({ base, callId }) → {
   getTripHistory(token) → trips[],
   searchFlights({ from, to, after, before }) → flights with fares,
   holdOrder(token, order) → { ref },
+  getFees() → { extra_bag_hkd },                 // illustrative (data/fees.json)
+  getBookings(token) → his held or paid orders, not flown,
+  changeOrder(token, ref, change) → order + difference_hkd,   // POST /mock-cathay/orders/<ref>/change
 }
 ```
 
-Each call emits one `system` event (DATA.md §2a "What the projector shows"). `modelSafeProfile` is the shape in DATA.md §4: no phone, email or delegate contacts.
+Each call emits one `system` event (DATA.md §2a "What the projector shows"). `modelSafeProfile` is the shape in DATA.md §4: no phone, email or delegate contacts, plus `tier` and `passport_on_file` (true/false; never the number).
 
 ## 5. Model session (`src/model/<name>.js`)
 
@@ -167,6 +172,7 @@ payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
 - `PAYMENT=sms`: `payEmail` gets `payUrl: null` and tells the payer to reply PAY.
 - 2026-11-14: no Twilio for the demo (calls reach a team phone bridged to a laptop), so PAY by text can't arrive. Payment is the demo pay page at `/pay/<trip page code>` (no money moves). `PAYMENT=page`: `send_pay_link` passes `payUrl: \`${baseUrl}/pay/${call.pageCode}\`` to `payEmail` and sends no "Reply PAY" text; when the traveller pays himself, the trip page shows a Pay button to the same link while the booking is held. A call started without Twilio must use the demo caller's number as `callerId` (as `/dev/simulate` does), because text 1 goes to that number's address on file.
 - 2026-11-15 (game plan): the member always pays for his own booking. `set_payer` is gone, nobody is asked who pays, and nothing goes to the family payer. With `PAYMENT=page`, `hold_booking` is followed straight by `send_pay_link`, which sends nothing: the trip page redirects to `/pay/<code>` while the booking is held. After payment the member gets the booked email (`bookedEmail`).
+- 2026-11-15 (game plan, personal booking manager): `verify_caller` refuses members below Gold unless they have a registered assistance need. New tools `set_baggage`, `set_special_request`, `find_booking`, `change_booking`; `set_preferences` takes a seat (window/aisle), cabin area, seat number or meal. Orders carry `seat_area`, `seat_number`, `extra_bags`, `extras_hkd`, `total_hkd`, `due_hkd`, `requests` and `passport` (last 3 digits). The pay page charges `due_hkd`. With `PAYMENT=page` the options and trip link are emailed on the first `find_flights`, and the confirmed hold opens the pay page itself. Seed: a second member (Green, Taipei) for the tier gate.
 - Eighth tool `ask_cathay({ question })` for general Cathay questions (RAG, `onday/RAG-PLAN.md` in the planning folder). It reads `deps.knowledge.search(question, limit) → Promise<[{ title, text, source, checked }]>`, which returns `[]` when nothing is relevant enough. The search is `src/knowledge.js`: `loadPassages()` reads `knowledge/*.md` (format in the file header; a passage without `Source` and `Checked` is skipped) and `createKnowledge({ passages, mode })` gives `{ search }`. `KNOWLEDGE=keyword` matches words and needs half the question's weighted words in a passage; `KNOWLEDGE=embeddings` is not built. `knowledge/` holds 23 draft passages (`Checked: 2026-11-14 draft`, not yet verified against Cathay's pages). `ask_cathay` also emits a `screen` event with `what: "knowledge"` naming the source. Details: `docs/TOOLS.md` §8.
 - `server.js` exports `wireApp()` (real modules) besides `createApp(deps)` (injected, for tests).
 

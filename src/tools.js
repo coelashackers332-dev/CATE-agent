@@ -1,4 +1,4 @@
-// The 8 tools the voice model can call (CONTRACTS.md §3). The model talks; every rule is enforced here.
+// The tools the voice model can call (CONTRACTS.md §3). The model talks; every rule is enforced here.
 //
 // createTools(deps) → { specs, runTool }
 //   deps.cathay   : either a FACTORY (callId) => adapter, e.g. (callId) => createCathay({ callId }), so the projector
@@ -61,6 +61,19 @@ const ASSISTANCE = {
 };
 const NO_ASSISTANCE = 'No wheelchair needed.';
 const wheelchairCode = (ssr) => ssr?.find((code) => code in ASSISTANCE) ?? null;
+
+// ---- Who gets CATE: Gold and above (GAME-PLAN 2026-11-15 §7). A member with a registered assistance need gets CATE
+// at every tier (open point 1, proposed), so the accessibility feature is never behind a status wall.
+const TIERS_WITH_CATE = ['Gold', 'Diamond', 'Diamond Exec', 'Diamond Plus'];
+
+// ---- Booking details a member can choose (the mock Orders system accepts the same lists).
+const SEATS = ['window', 'aisle'];
+const SEAT_AREAS = ['front', 'middle', 'back'];
+const MEALS = ['standard', 'vegetarian', 'vegan', 'halal', 'kosher', 'hindu', 'diabetic', 'low salt', 'gluten free', 'child'];
+const SEAT_NUMBER = /^([1-9]|[1-6]\d|70)[ABCDEFGHJK]$/;
+const MAX_EXTRA_BAGS = 3;
+const MAX_REQUESTS = 3;
+const NO_REQUEST = 'No special requests.';
 
 // ---- Small helpers
 const fail = (error) => ({ ok: false, error });
@@ -134,14 +147,42 @@ const specs = [
   {
     name: 'set_preferences',
     description: 'Call as soon as he answers the question about the seat and meal on his membership. Records his answer. '
-      + 'The result gives you a sentence to say back to him and the next question to ask.',
+      + 'If he wants a different seat, pass what he asked for: window or aisle, front, middle or back of the cabin, or a seat number like 21A. '
+      + 'If he wants a different meal, pass it. The result gives you a sentence to say back to him and the next question to ask.',
     inputSchema: {
       type: 'object',
       properties: {
         seat_ok: { type: 'boolean', description: 'True if the seat on his membership is still right; false if he wants a different seat' },
         meal_ok: { type: 'boolean', description: 'True if the meal on his membership is still right; false if he wants a different meal' },
+        seat: { type: 'string', enum: SEATS, description: 'Only if he wants a different seat: window or aisle' },
+        seat_area: { type: 'string', enum: SEAT_AREAS, description: 'Only if he named one: front, middle or back of the cabin' },
+        seat_number: { type: 'string', description: 'Only if he named a seat, e.g. "21A"' },
+        meal: { type: 'string', enum: MEALS, description: 'Only if he wants a different meal' },
       },
       required: ['seat_ok', 'meal_ok'],
+    },
+  },
+  {
+    name: 'set_baggage',
+    description: 'Call as soon as he answers whether he wants extra checked baggage on top of the bags on his membership. '
+      + 'Pass 0 for no extra bags. The result gives you a sentence to say back to him and the next question to ask.',
+    inputSchema: {
+      type: 'object',
+      properties: { extra_bags: { type: 'integer', minimum: 0, maximum: MAX_EXTRA_BAGS, description: 'Extra checked bags he wants, 0 to 3' } },
+      required: ['extra_bags'],
+    },
+  },
+  {
+    name: 'set_special_request',
+    description: 'Call when he answers "Is there anything else we should arrange for this trip?", or whenever he asks for something special '
+      + '(a birthday or anniversary on board, medical equipment, help with a connection). Pass his request in his own words, or none true. '
+      + 'It is recorded on the booking for Cathay staff; never promise that it will be granted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        request: { type: 'string', description: 'His request in his own words, e.g. "It is my wife\'s birthday on the flight"' },
+        none: { type: 'boolean', description: 'True if he has no special request' },
+      },
     },
   },
   {
@@ -178,6 +219,32 @@ const specs = [
     inputSchema: { type: 'object', properties: {} },
   },
   {
+    name: 'find_booking',
+    description: 'Call when he wants to change a booking he already has (dates, seat, meal or baggage). Returns his bookings that can still be changed. '
+      + 'If there are several, ask which one. Never read out a booking that is not in the result.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'change_booking',
+    description: 'Changes one of his bookings from find_booking. For new dates, first call find_flights to the same city and let him choose, then pass option_id. '
+      + 'For a seat, meal or baggage change, pass only what he wants changed. The first call returns a readback: say it word for word and wait. '
+      + 'Only after he clearly says yes, call again with the same changes and caller_confirmed true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'The booking reference from find_booking' },
+        option_id: { type: 'string', description: 'Only for new dates: the option he chose from find_flights' },
+        seat: { type: 'string', enum: SEATS },
+        seat_area: { type: 'string', enum: SEAT_AREAS },
+        seat_number: { type: 'string', description: 'e.g. "21A"' },
+        meal: { type: 'string', enum: MEALS },
+        extra_bags: { type: 'integer', minimum: 0, maximum: MAX_EXTRA_BAGS, description: 'The number of extra bags he wants on this booking in total' },
+        caller_confirmed: { type: 'boolean', description: 'True only if his last words were a clear yes to the change readback' },
+      },
+      required: ['ref'],
+    },
+  },
+  {
     name: 'ask_cathay',
     description: 'Call when he asks a general question about flying with Cathay that is not about this booking: baggage, check-in times, '
       + 'wheelchair help at the airport, mobility aids, medical equipment, changing a ticket. Pass his question in his own words. '
@@ -209,7 +276,9 @@ export function createTools(deps) {
   /** Creates or refreshes this call's one view-only trip page and returns its link. Only a call creates pages. */
   function tripPage(call) {
     call.pageCode ??= newPageCode();
-    const lastArrival = call.options.map((o) => o.back.arr.slice(0, 10)).sort().at(-1);
+    // A booking changed without new flights has no options on this call: the page lasts until that trip is over.
+    const trips = call.options?.length ? call.options : [call.order].filter(Boolean);
+    const lastArrival = trips.map((o) => o.back.arr.slice(0, 10)).sort().at(-1);
     const expires = new Date(Date.parse(lastArrival) + 864e5).toISOString().slice(0, 10);   // the day after the trip
     store.pages.set(call.pageCode, { member_id: call.memberId, options: call.options, ref: call.ref ?? null, expires });
     return `${baseUrl}/v/${call.pageCode}`;
@@ -229,27 +298,52 @@ export function createTools(deps) {
     emit(call.id, 'screen', { what: 'options_page', summary: 'trip page created', url: link });
   }
 
-  function readback(option, profile, assistance) {
+  /** Illustrative fees from the Orders system, read once per call. */
+  async function feesOf(call, cathay) {
+    call.fees ??= await cathay.getFees().catch(() => ({ extra_bag_hkd: null }));
+    return call.fees;
+  }
+
+  /** The seat as it will be booked: what he chose on this call over what is on his membership. */
+  const seatOf = (profile, choice = {}) => ({
+    seat: choice.seat ?? profile.prefs?.seat, seat_area: choice.seat_area ?? profile.prefs?.seat_area, seat_number: choice.seat_number ?? null,
+  });
+  /** "seat 21A", "a window seat near the front", "an aisle seat": the words for a seat choice. */
+  function seatWords({ seat, seat_area: area, seat_number: number }) {
+    if (number) return `seat ${number}`;
+    if (!seat && !area) return '';
+    const where = area ? ` ${area === 'middle' ? 'in the middle' : `near the ${area}`} of the cabin` : '';
+    return `${seat === 'aisle' ? 'an aisle' : seat ? 'a window' : 'a'} seat${where}`;
+  }
+  const bagWords = (n) => `${n} extra checked bag${n === 1 ? '' : 's'}`;
+  const extrasOf = (call) => (call.extraBags ?? 0) * (call.fees?.extra_bag_hkd ?? 0);
+
+  function readback(option, profile, call) {
     const { out, back } = option;
-    const wishes = [profile.prefs?.seat && `${profile.prefs.seat} seat`, profile.prefs?.meal && `${profile.prefs.meal} meal`].filter(Boolean).join(', ');
+    const seat = seatWords(seatOf(profile, call.seatChoice));
+    const meal = call.meal ?? profile.prefs?.meal;
+    const wishes = [seat, meal && `${/^[aeiou]/.test(meal) ? 'an' : 'a'} ${meal} meal`].filter(Boolean).join(', ');
+    const extras = extrasOf(call);
     return [
       // The opening line is part of the read-back, so it is said once, at the right moment.
-      `Let me read it all back to you. Nothing is booked until you say yes. Booking for ${titleCase(profile.name)}.`,
+      `Let me read it all back to you. Nothing is booked until you say yes. Booking for ${titleCase(profile.name)}${profile.passport_on_file ? ', with the passport on your membership' : ''}.`,
       `${cityOf(out.from)} to ${out.city}, flight ${out.flight}, ${fmtDay(out.dep)}, leaving at ${spokenTime(out.dep)}${option.note ? `, ${option.note}` : ''}.`,
       `Coming back on flight ${back.flight}, ${fmtDay(back.dep)}, leaving at ${spokenTime(back.dep)}.`,
       wishes && `${wishes[0].toUpperCase()}${wishes.slice(1)}.`,
-      assistance.summary,
-      `The total is ${spokenMoney(option.fare_hkd)} for the return trip.`,
+      call.assistance.summary,
+      call.extraBags ? `${bagWords(call.extraBags)[0].toUpperCase()}${bagWords(call.extraBags).slice(1)}, ${spokenMoney(extras)}.` : '',
+      call.requests?.length ? `Noted for our staff: ${call.requests.join('; ')}.` : '',
+      `The total is ${spokenMoney(option.fare_hkd + extras)} for the return trip.`,
       config.payment === 'page' ? 'Once it is held, the payment page opens on your phone.' : 'The pay request will come to your own phone.',
       'Shall I hold this booking?',
     ].filter(Boolean).join(' ');
   }
 
   const ORDINAL = ['first', 'second', 'third'];
-  const wishesOf = (profile) => [profile.prefs?.seat && `a ${profile.prefs.seat} seat`, profile.prefs?.meal && `a ${profile.prefs.meal} meal`].filter(Boolean).join(' and ');
+  const wishesOf = (profile) => [seatWords(seatOf(profile)), profile.prefs?.meal && `a ${profile.prefs.meal} meal`].filter(Boolean).join(' and ');
 
-  /** What to ask next before the read-back, one question at a time, with the caller's own data in it. null = everything is recorded. */
-  async function nextStep(call, cathay) {
+  /** What must be answered before the read-back, one question at a time, with the caller's own data in it. null = all done. */
+  async function requiredStep(call, cathay) {
     const profile = await profileOf(call, cathay);
     if (!call.choice) return 'Ask which option he would like, then call choose_option.';
     if (!call.prefs && wishesOf(profile)) return `Ask: "Your membership has ${wishesOf(profile)}. Is that still right?" Then call set_preferences with his answer.`;
@@ -262,11 +356,48 @@ export function createTools(deps) {
     return null;
   }
 
+  /** The next question: the required ones, then baggage and special requests (asked once, but not needed to hold). */
+  async function nextStep(call, cathay) {
+    const required = await requiredStep(call, cathay);
+    if (required) return required;
+    const profile = await profileOf(call, cathay);
+    if (call.extraBags === undefined) {
+      const fee = (await feesOf(call, cathay)).extra_bag_hkd;
+      const usual = profile.prefs?.bags;
+      return `Ask: "${usual ? `Your membership has ${usual} checked bag${usual === 1 ? '' : 's'}. ` : ''}Would you like any extra baggage${fee ? `? It is ${spokenMoney(fee)} a bag` : ''}?" Then call set_baggage.`;
+    }
+    if (call.requests === undefined) return 'Ask: "Is there anything else we should arrange for this trip, like a special occasion?" Then call set_special_request.';
+    return null;
+  }
+
   /** An answer was recorded: the model says `confirm` back at once, then asks the one next thing. Any earlier read-back is out of date. */
   async function recorded(call, cathay, confirm, extra = {}) {
     call.pendingHold = null;
+    if (call.changeRef) return { ok: true, ...extra, confirm, next: `Say: "${confirm}" Then call change_booking for booking ${call.changeRef} with this change.` };
     const then = (await nextStep(call, cathay)) ?? 'call hold_booking now, in this same turn, without asking him anything first, and say the readback it returns.';
     return { ok: true, ...extra, confirm, next: `Say: "${confirm}" Then: ${then} Never record an answer he has not given.` };
+  }
+
+  /** A seat or meal he asked for, checked against the lists. → { seat, seat_area, seat_number, meal } or { error }. */
+  function wishFrom(args) {
+    const wish = {};
+    if (args.seat != null) { if (!SEATS.includes(args.seat)) return { error: 'Ask: window or aisle?' }; wish.seat = args.seat; }
+    if (args.seat_area != null) { if (!SEAT_AREAS.includes(args.seat_area)) return { error: 'Ask: front, middle or back of the cabin?' }; wish.seat_area = args.seat_area; }
+    if (args.seat_number != null && args.seat_number !== '') {
+      const number = String(args.seat_number).replace(/\s+/g, '').toUpperCase();
+      if (!SEAT_NUMBER.test(number)) return { error: `"${args.seat_number}" is not a seat on our planes. Ask for a row from 1 to 70 and a letter, like 21A, or window or aisle.` };
+      wish.seat_number = number;
+    }
+    if (args.meal != null) { if (!MEALS.includes(args.meal)) return { error: `Ask which meal he would like: ${MEALS.join(', ')}.` }; wish.meal = args.meal; }
+    return wish;
+  }
+
+  /** Sends a short message with the trip page link to the member's own number on file (by email when TEXTS=email). */
+  async function sendChangeNote(call, order) {
+    const link = tripPage(call);
+    const due = order.status === 'held' ? `\nPay the difference of ${Number(order.due_hkd).toLocaleString('en-US')} HKD on your trip page:` : '\nYour trip page shows the booking as it is now:';
+    await deps.messages.sendSms(call.callerId, `Cathay CATE: your booking ${order.ref} has been changed${due}\n${link}`);
+    emit(call.id, 'screen', { what: 'sms', summary: `booking ${order.ref} changed: trip link sent` });
   }
 
   const handlers = {
@@ -284,12 +415,35 @@ export function createTools(deps) {
         return { ...fail('That answer does not match. Ask "Where did you last fly with us?" once more. Do not give hints.'), verified: false };
       }
       call.token = check.token;
+      // Tier gate: CATE is the personal booking manager of Gold members and above, and of any member with a
+      // registered assistance need. Checked in code, after verification, so nobody learns a status they cannot prove.
+      const profile = await profileOf(call, cathay);
+      const needsHelp = Object.values(profile.needs ?? {}).some((v) => v === false)
+        || profile.recent_trips.some((t) => wheelchairCode(t.ssr));
+      if (!TIERS_WITH_CATE.includes(profile.tier) && !needsHelp) {
+        call.token = null;
+        call.profile = null;
+        call.refused = true;
+        emit(call.id, 'screen', { what: 'tier', summary: `${profile.tier} member: CATE is for Gold and above` });
+        return {
+          ...fail('This service is for Gold members and above. Say kindly that CATE, the personal booking service, is part of Gold membership and above, '
+            + 'that the Cathay app and the member service line can help with this, and that he earns Gold with his status points. Then say goodbye. '
+            + 'Do not help with a booking on this call.'),
+          verified: false,
+        };
+      }
       call.verified = true;
+      emit(call.id, 'screen', { what: 'tier', summary: TIERS_WITH_CATE.includes(profile.tier) ? `${profile.tier} member` : `${profile.tier} member with an assistance need` });
       return { ok: true, verified: true, next: 'Call apply_profile now.' };
     },
 
     async apply_profile(_args, call, cathay) {
-      return { ok: true, profile: await profileOf(call, cathay) };
+      const profile = await profileOf(call, cathay);
+      return {
+        ok: true, profile,
+        next: `Thank him by family name, as a ${profile.tier} member, and ask which service he would like today: book a flight, `
+          + 'change a booking he has (dates, seat, meal or baggage), or a special request. Then follow his answer.',
+      };
     },
 
     // Rules: only seeded flights with a fare; ranked by the profile; at most 3; the model gets ready-made sentences.
@@ -408,6 +562,9 @@ export function createTools(deps) {
       if (index < 0) return fail('That is not one of the options from this call. Ask which option he wants.');
       const option = call.options[index];
       call.choice = option.id;
+      if (call.changeRef) {
+        return { ok: true, confirm: `The ${ORDINAL[index]} option.`, next: `Call change_booking now for booking ${call.changeRef} with option_id ${option.id}, and say the readback it returns.` };
+      }
       return recorded(call, cathay, `The ${ORDINAL[index]} option: ${fmtDay(option.out.dep)} at ${spokenTime(option.out.dep)}, ${option.note || 'direct'}, ${spokenMoney(option.fare_hkd)} return.`);
     },
 
@@ -416,15 +573,43 @@ export function createTools(deps) {
       // Seat and meal are separate answers: with one yes/no the model turned "another meal, same seat" into a plain yes.
       const [seatOk, mealOk] = [yesNo(args.seat_ok), yesNo(args.meal_ok)];
       if (seatOk === null || mealOk === null) return fail('Ask him first if the seat and meal on his membership are still right.');
-      const { prefs } = await profileOf(call, cathay);
-      const items = [[prefs?.seat && `${prefs.seat} seat`, seatOk, 'seat'], [prefs?.meal && `${prefs.meal} meal`, mealOk, 'meal']].filter(([item]) => item);
-      const kept = items.filter(([, ok]) => ok).map(([item]) => item);
-      const wanted = items.filter(([, ok]) => !ok);
-      call.prefs = wanted.length ? 'change wanted' : 'kept';
-      return recorded(call, cathay, wanted.length
-        ? `${kept.length ? `I will keep the ${kept.join(' and the ')}. ` : ''}On this call I can only book the ${wanted.map(([item]) => item).join(' and the ')} on your membership. `
-          + `A member of staff can change the ${wanted.map(([, , what]) => what).join(' and the ')} after booking.`
-        : `A ${kept.join(' and a ')}, as on your membership.`);
+      const wish = wishFrom(args);
+      if (wish.error) return fail(wish.error);
+      const wantsSeat = wish.seat || wish.seat_area || wish.seat_number;
+      if (!seatOk && !wantsSeat) return fail('Ask which seat he would like: window or aisle, front, middle or back of the cabin, or a seat number like 21A. Then call set_preferences again.');
+      if (!mealOk && !wish.meal) return fail(`Ask which meal he would like: ${MEALS.join(', ')}. Then call set_preferences again.`);
+      const profile = await profileOf(call, cathay);
+      // A seat number is a choice of its own; window/aisle and the cabin area fill in from the membership when not said.
+      call.seatChoice = seatOk ? {} : wish.seat_number ? { seat_number: wish.seat_number } : { seat: wish.seat, seat_area: wish.seat_area };
+      call.meal = mealOk ? undefined : wish.meal;
+      call.prefs = seatOk && mealOk ? 'kept' : 'changed';
+      const seat = seatWords(seatOf(profile, call.seatChoice));
+      const meal = call.meal ?? profile.prefs?.meal;
+      const said = [seat, meal && `${/^[aeiou]/.test(meal) ? 'an' : 'a'} ${meal} meal`].filter(Boolean).join(' and ');
+      return recorded(call, cathay, `${said[0].toUpperCase()}${said.slice(1)}${call.prefs === 'kept' ? ', as on your membership' : ''}.`);
+    },
+
+    // Rule: the number of bags is a whole number 0-3; the fee comes from the Orders system, never from the model.
+    async set_baggage(args, call, cathay) {
+      const n = Number(args.extra_bags);
+      if (!Number.isInteger(n) || n < 0 || n > MAX_EXTRA_BAGS) return fail(`Ask how many extra bags he would like, from 0 to ${MAX_EXTRA_BAGS}. More than that needs a member of staff.`);
+      const fee = (await feesOf(call, cathay)).extra_bag_hkd ?? 0;
+      call.extraBags = n;
+      return recorded(call, cathay, n ? `${bagWords(n)[0].toUpperCase()}${bagWords(n).slice(1)}, ${spokenMoney(n * fee)}.` : 'No extra baggage.', { extra_bags: n, fee_hkd: n * fee });
+    },
+
+    // Rule: a special request is recorded for Cathay staff, in his own words, never granted or priced by CATE.
+    async set_special_request(args, call, cathay) {
+      const text = String(args.request ?? '').replace(/[\r\n]+/g, ' ').trim().slice(0, 200);
+      if (!text) {
+        if (yesNo(args.none) !== true) return fail('Ask: "Is there anything else we should arrange for this trip?"');
+        call.requests ??= [];
+        return recorded(call, cathay, 'Nothing else to arrange.');
+      }
+      call.requests = [...(call.requests ?? []), text].slice(0, MAX_REQUESTS);
+      emit(call.id, 'screen', { what: 'request', summary: `special request noted for staff: ${text}` });
+      const medical = /oxygen|respirat|cpap|concentrator|ventilat|medical|stretcher/i.test(text);
+      return recorded(call, cathay, `I have noted that for our staff: ${text}.${medical ? ' Medical equipment needs Cathay\'s approval before the flight, so I have passed it on for that check.' : ' I have passed it to our team.'}`);
     },
 
     // Rules: two steps (read-back, then hold); only an option from this call; name, seat and meal from the profile.
@@ -434,20 +619,24 @@ export function createTools(deps) {
         if (!call.options?.some((o) => o.id === String(args.option_id))) return fail('That is not one of the options from this call. Ask which option he wants.');
         if (call.choice !== String(args.option_id)) { call.choice = String(args.option_id); call.pendingHold = null; }
       }
-      const missing = await nextStep(call, cathay);
+      const missing = await requiredStep(call, cathay);
       if (missing) return fail(`Not yet. ${missing} Never record an answer he has not given.`);
       const option = call.options.find((o) => o.id === call.choice);
       const profile = await profileOf(call, cathay);
+      if (call.extraBags) await feesOf(call, cathay);
 
       const confirmed = yesNo(args.caller_confirmed) === true && call.pendingHold?.option_id === option.id;
       if (!confirmed) {
         call.pendingHold = { option_id: option.id };
-        return { ok: true, needs_confirmation: true, readback: readback(option, profile, call.assistance) };
+        return { ok: true, needs_confirmation: true, readback: readback(option, profile, call) };
       }
 
+      // Name and passport come from the membership (the Orders system adds the passport itself); nothing is asked again.
+      const seat = seatOf(profile, call.seatChoice);
       const order = await cathay.holdOrder(call.token, {
         option_id: option.id, out: option.out, back: option.back, fare_hkd: option.fare_hkd,
-        cabin: 'economy', seat: profile.prefs?.seat, meal: profile.prefs?.meal,
+        cabin: 'economy', seat: seat.seat, seat_area: seat.seat_area, seat_number: seat.seat_number ?? undefined,
+        meal: call.meal ?? profile.prefs?.meal, extra_bags: call.extraBags ?? 0, requests: call.requests ?? [],
         ssr: call.assistance.code ? [call.assistance.code] : [],
         payer: titleCase(profile.name),   // the member always pays for his own booking
         passenger: profile.name,
@@ -491,6 +680,95 @@ export function createTools(deps) {
       return {
         ok: true, sent_to: call.payRequested,
         say: 'Tell him the pay request is on its way to his own phone and that he replies PAY to that text. A text with his booking and his needs card comes as soon as it is paid. Then ask if there is anything else you can help with.',
+      };
+    },
+
+    // Rule: only his own bookings, from the Orders system, and only those not flown yet.
+    async find_booking(_args, call, cathay) {
+      const bookings = await cathay.getBookings(call.token);
+      call.bookings = bookings;
+      if (!bookings.length) return { ok: true, bookings: [], say: 'Say he has no booking with us that can still be changed, and ask if he would like to book a flight.' };
+      const described = bookings.map((b) => ({
+        ref: b.ref, ref_spoken: [...b.ref].join(' '), status: b.status,
+        trip: `${b.city}, leaving ${fmtDay(b.out.dep)} at ${spokenTime(b.out.dep)}, back ${fmtDay(b.back.dep)}`,
+        seat: seatWords(b), meal: b.meal, extra_bags: b.extra_bags,
+      }));
+      if (bookings.length === 1) call.changeRef = bookings[0].ref;
+      return {
+        ok: true, bookings: described,
+        say: bookings.length === 1
+          ? `Tell him the booking you found: ${described[0].trip}. Ask what he would like to change: the dates, the seat, the meal or the baggage.`
+          : 'Read the trips briefly and ask which booking he means, then what he would like to change.',
+      };
+    },
+
+    // Rules: only his own booking; new flights only from this call's search; prices and the difference come from the
+    // Orders system; two steps (read-back, then change) like a hold.
+    async change_booking(args, call, cathay) {
+      const ref = String(args.ref ?? '').replace(/\s+/g, '').toUpperCase();
+      const booking = (call.bookings ?? await cathay.getBookings(call.token)).find((b) => b.ref === ref);
+      if (!booking) return fail('That is not one of his bookings. Call find_booking and ask which booking he means.');
+      call.changeRef = ref;
+      const change = {};
+      if (args.option_id != null) {
+        const option = call.options?.find((o) => o.id === String(args.option_id));
+        if (!option) return fail('That is not one of the options from this call. Call find_flights with his new dates first, then ask which option he wants.');
+        if (option.out.to !== booking.out.to) return fail(`That option is not to ${booking.city}. For another city, book a new trip instead.`);
+        Object.assign(change, { option_id: option.id, out: option.out, back: option.back, fare_hkd: option.fare_hkd });
+      }
+      const wish = wishFrom(args);
+      if (wish.error) return fail(wish.error);
+      if (wish.seat_number) Object.assign(change, { seat_number: wish.seat_number });
+      else if (wish.seat || wish.seat_area) Object.assign(change, { ...wish.seat && { seat: wish.seat }, ...wish.seat_area && { seat_area: wish.seat_area }, seat_number: '' });
+      if (wish.meal) change.meal = wish.meal;
+      if (args.extra_bags != null) {
+        const n = Number(args.extra_bags);
+        if (!Number.isInteger(n) || n < 0 || n > MAX_EXTRA_BAGS) return fail(`Ask how many extra bags he wants on this booking in total, from 0 to ${MAX_EXTRA_BAGS}.`);
+        change.extra_bags = n;
+      }
+      if (!Object.keys(change).length) return fail('Ask what he would like to change: the dates, the seat, the meal or the baggage.');
+
+      // The price after the change, as the Orders system will work it out: new fare (or the old one) plus extra bags.
+      const fee = (await feesOf(call, cathay)).extra_bag_hkd ?? 0;
+      const fare = change.fare_hkd ?? booking.fare_hkd;
+      const total = fare + (change.extra_bags ?? booking.extra_bags) * fee;
+      const difference = total - booking.total_hkd;
+      const key = JSON.stringify({ ref, change });
+      if (!(yesNo(args.caller_confirmed) === true && call.pendingChange === key)) {
+        call.pendingChange = key;
+        const lines = [
+          `Let me read the change back. Nothing changes until you say yes. Booking ${[...ref].join(' ')} to ${booking.city}.`,
+          change.out && `New flights: leaving ${fmtDay(change.out.dep)} at ${spokenTime(change.out.dep)}, coming back ${fmtDay(change.back.dep)} at ${spokenTime(change.back.dep)}.`,
+          (change.seat_number || change.seat || change.seat_area) && `Seat: ${seatWords({ seat: change.seat ?? booking.seat, seat_area: change.seat_area ?? booking.seat_area, seat_number: change.seat_number || null })}.`,
+          change.meal && `Meal: ${change.meal}.`,
+          change.extra_bags != null && `Baggage: ${change.extra_bags ? bagWords(change.extra_bags) : 'no extra bags'}.`,
+          difference > 0
+            ? `It costs ${spokenMoney(difference)} more${booking.status === 'paid' ? ', which you pay on the payment page on your phone' : ''}.`
+            : difference < 0 ? `The new total is ${spokenMoney(total)}, which is less than before.` : 'The price stays the same.',
+          'Shall I make this change?',
+        ];
+        return { ok: true, needs_confirmation: true, readback: lines.filter(Boolean).join(' ') };
+      }
+
+      const changed = await cathay.changeOrder(call.token, ref, change);
+      call.pendingChange = null;
+      call.changeRef = null;
+      call.bookings = null;
+      call.ref = changed.ref;
+      call.order = changed;
+      try { await sendChangeNote(call, changed); } catch (err) { console.error(`[tools] change note for ${ref} not sent: ${err.message}`); }
+      if (changed.status === 'held' && config.payment === 'page') {
+        openPayPage(call);
+        return {
+          ok: true, ref, status: 'held', due_hkd: changed.due_hkd,
+          say: `Tell him the change is made and that ${spokenMoney(changed.due_hkd)} is to pay: the payment page is now open on his phone, on his trip page. An email comes as soon as it is paid. Stay on the line.`,
+        };
+      }
+      return {
+        ok: true, ref, status: changed.status,
+        say: changed.status === 'held'
+          ? 'Tell him the change is made, and that the booking is now waiting for payment on his trip page. Then ask if there is anything else.'
+          : 'Tell him the change is made, that nothing more is to pay, and that an email with his updated trip page is on its way. Then ask if there is anything else.',
       };
     },
 

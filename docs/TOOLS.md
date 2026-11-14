@@ -1,6 +1,6 @@
 # CATE tools
 
-The voice model can only listen, talk, and choose one of the 8 tools on this page. Each tool is a function in our code (`src/tools.js`). The rules live in that function, so the model cannot talk its way past them.
+The voice model can only listen, talk, and choose one of the tools on this page. Each tool is a function in our code (`src/tools.js`). The rules live in that function, so the model cannot talk its way past them.
 
 | # | Tool | In one line |
 |---|---|---|
@@ -12,7 +12,8 @@ The voice model can only listen, talk, and choose one of the 8 tools on this pag
 | 6 | [`hold_booking`](#6-hold_booking) | Reads the trip back, then holds the booking after a yes |
 | 7 | [`send_pay_link`](#7-send_pay_link) | Opens the payment page on the member's own phone (the member always pays himself) |
 | 8 | [`ask_cathay`](#8-ask_cathay) | Answers a general question about flying with Cathay, from checked passages only |
-
+| 9 | [`choose_option`, `set_preferences`, `set_baggage`, `set_special_request`](#9-the-callers-answers-option-seat-and-meal-baggage-requests) | Record the caller's answers: option, seat and meal, extra bags, special requests |
+| 10 | [`find_booking`, `change_booking`](#10-find_booking-and-change_booking) | Find a booking he has and change its dates, seat, meal or baggage |
 The usual order in a call is 1 → 2 → 3 → 4 (optional) → 5 → 6 (twice) → 7. Tool 8 can be called at any point after verification, whenever the caller asks a general question.
 
 ## Rules that apply to every tool
@@ -310,6 +311,29 @@ Answers a general question about flying with Cathay that is not about this booki
 
 ---
 
+## 9. The caller's answers: option, seat and meal, baggage, requests
+
+One tool per answer. Each result has `confirm` (a sentence to say back) and `next` (the one next question), so the call moves one question at a time.
+
+| Tool | Input | Rule |
+|---|---|---|
+| `choose_option` | `option_id` | Only an option from this call's `find_flights`. During a change, it leads to `change_booking`. |
+| `set_preferences` | `seat_ok`, `meal_ok`, and only if he wants something else: `seat` (window, aisle), `seat_area` (front, middle, back), `seat_number` (e.g. 21A), `meal` (fixed list) | A seat number must exist on our planes (rows 1–70, letters A–K without I). A "no" without a choice is answered with the question, never a guess. |
+| `set_baggage` | `extra_bags` 0–3 | The fee comes from the Orders system (`data/fees.json`, illustrative), never from the model. More than 3 bags goes to staff. |
+| `set_special_request` | `request` in his words, or `none` | Recorded on the booking for staff, max 3, 200 characters each. Never granted or priced by CATE; medical equipment is passed on for Cathay's approval. |
+
+Option, seat and meal, and wheelchair help must be recorded before `hold_booking`. Baggage and requests are asked once but never block the hold. Name and passport come from the profile: the Orders system adds "HKG passport ending 478" to the booking; the number never reaches the model.
+
+**Tier gate (in `verify_caller`).** After the travel-history check, CATE reads the member's tier. Gold, Diamond, Diamond Exec and Diamond Plus get CATE; so does any member with a registered assistance need (game plan, open point 1). Anyone else is told kindly that CATE is part of Gold membership and above, and no tool works for the rest of the call.
+
+## 10. `find_booking` and `change_booking`
+
+`find_booking` returns his own bookings that are held or paid and not flown, from the Orders system. `change_booking` changes one of them, in two steps like `hold_booking`: the first call returns a read-back with the price difference; only a second call with the same changes and `caller_confirmed: true` makes the change (NDC OrderChange style, `POST /mock-cathay/orders/<ref>/change`).
+
+- **New dates:** `find_flights` to the same city, he chooses, then `change_booking` with `option_id`. Another city is a new booking, not a change.
+- **Seat, meal or bags:** only the fields he wants changed.
+- **Money:** the Orders system works out the new total. A paid booking that now costs more goes back to *held* with only the difference due; his trip page opens the payment page for that amount, and the booked email follows the payment. Cheaper or the same: it stays paid (refunds of a lower fare are for staff).
+- He gets a short message with his trip page link after every change.
 ## For developers
 
 ```js

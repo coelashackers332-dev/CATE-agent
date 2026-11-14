@@ -1,7 +1,7 @@
 // MOCK Cathay systems (DATA.md §2a): Membership, Orders and Schedule over the in-memory store.
 // Same process as CATE, but behind a real HTTP boundary. Only src/cathay.js calls these routes.
 // In production that adapter points at Cathay's own systems and this folder is not used.
-import { store, newRef, newToken, findMember } from '../store.js';
+import { store, newRef, newToken, findMember, setOrderStatus } from '../store.js';
 import { serviceKey } from './key.js';
 
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
@@ -42,9 +42,14 @@ function answerMatches(order, answer) {
   return (said.match(MONTH_WORDS) ?? []).every((word) => MONTHS.findIndex((m) => m.startsWith(word)) + 1 === tripMonth);
 }
 
-/** What CATE may hand the voice model (DATA.md §4): no phone, no email, no delegate contacts. */
+/**
+ * What CATE may hand the voice model (DATA.md §4): no phone, no email, no delegate contacts, and of the passport
+ * only that it is on file (the booking takes it from here, server side; it is never read out).
+ */
 const modelSafeProfile = (m) => ({
   name: `${m.name.family} ${m.name.given}`,
+  tier: m.tier ?? 'Green',
+  passport_on_file: Boolean(m.passport?.number),
   language: m.language,
   speech: { pace: m.speech?.pace },
   prefs: m.prefs,
@@ -53,6 +58,20 @@ const modelSafeProfile = (m) => ({
 });
 
 const isSeeded = (seg) => Boolean(seg) && store.flights.some((f) => f.flight === seg.flight && f.dep === seg.dep && f.from === seg.from && f.to === seg.to);
+
+// Booking details a member can choose. Anything else is dropped, so free text from a call never lands in these fields.
+const SEATS = ['window', 'aisle'];
+const SEAT_AREAS = ['front', 'middle', 'back'];
+const MEALS = ['standard', 'vegetarian', 'vegan', 'halal', 'kosher', 'hindu', 'diabetic', 'low salt', 'gluten free', 'child'];
+const SEAT_NUMBER = /^([1-9]|[1-6]\d|70)[ABCDEFGHJK]$/;   // rows 1-70, no I (as on Cathay's seat maps)
+const MAX_REQUESTS = 3;
+const pick = (value, allowed) => (allowed.includes(value) ? value : undefined);
+const seatNumber = (value) => (SEAT_NUMBER.test(String(value ?? '').toUpperCase()) ? String(value).toUpperCase() : undefined);
+const bags = (value) => (Number.isInteger(value) && value >= 0 && value <= 3 ? value : 0);
+const requests = (list) => (Array.isArray(list) ? list : []).map((r) => String(r).replace(/[\r\n]+/g, ' ').trim().slice(0, 200)).filter(Boolean).slice(0, MAX_REQUESTS);
+const amount = (value) => (Number.isFinite(value) && value >= 0 ? Math.round(value) : null);
+/** Passport on the booking: country and the last 3 digits only. The number itself stays in Membership. */
+const passportNote = (m) => (m.passport?.number ? `${m.passport.country} passport ending ${m.passport.number.slice(-3)}` : null);
 
 async function route(req, res, url) {
   const path = url.pathname.slice('/mock-cathay'.length);
@@ -88,6 +107,9 @@ async function route(req, res, url) {
     });
   }
 
+  // ---- Fees for extras (illustrative, like the fares).
+  if (op === 'GET /fees') return send(res, 200, { extra_bag_hkd: store.fees.extra_bag_hkd ?? null });
+
   // ---- Everything below needs the session token from a passed verification.
   const token = /^Bearer (.+)$/.exec(req.headers.authorization ?? '')?.[1];
   const session = store.sessions.get(token);
@@ -112,15 +134,51 @@ async function route(req, res, url) {
   if (op === 'POST /orders') {
     const o = await readJson(req);
     if (!isSeeded(o.out) || !isSeeded(o.back)) return send(res, 422, { error: 'flight not in the schedule' });
+    const fare = amount(o.fare_hkd);
+    const extras = bags(o.extra_bags) * (store.fees.extra_bag_hkd ?? 0);
     const order = {
       ref: newRef(), member_id: member.member_id, status: 'held',
-      option_id: o.option_id, out: o.out, back: o.back, fare_hkd: o.fare_hkd,
-      cabin: o.cabin ?? 'economy', seat: o.seat, meal: o.meal,
+      option_id: o.option_id, out: o.out, back: o.back, fare_hkd: fare,
+      cabin: o.cabin ?? 'economy', seat: pick(o.seat, SEATS), seat_area: pick(o.seat_area, SEAT_AREAS),
+      ...(seatNumber(o.seat_number) && { seat_number: seatNumber(o.seat_number) }), meal: pick(o.meal, MEALS),
+      extra_bags: bags(o.extra_bags), extras_hkd: extras, total_hkd: fare + extras, due_hkd: fare + extras,
+      requests: requests(o.requests),
       ssr: (o.ssr ?? []).filter((code) => WHEELCHAIR_CODES.includes(code)),
+      passport: passportNote(member),
       payer: o.payer, passenger: o.passenger,
     };
     store.orders.push(order);
     return send(res, 201, order);
+  }
+
+  // ---- Orders: change a booking that is held or paid (NDC OrderChange style): new flights, seat, meal or bags.
+  // The new total is worked out here. A paid booking that now costs more goes back to held, with the difference due.
+  const changeRoute = /^\/orders\/([A-Z0-9]{6})\/change$/.exec(path);
+  if (req.method === 'POST' && changeRoute) {
+    const order = store.orders.find((x) => x.ref === changeRoute[1] && x.member_id === member.member_id);
+    if (!order || !['held', 'paid'].includes(order.status) || !order.out) return send(res, 404, { error: 'no booking to change' });
+    const c = await readJson(req);
+    if (c.out || c.back) {
+      if (!isSeeded(c.out) || !isSeeded(c.back)) return send(res, 422, { error: 'flight not in the schedule' });
+      if (amount(c.fare_hkd) == null) return send(res, 422, { error: 'no fare' });
+    }
+    const before = order.total_hkd ?? order.fare_hkd;
+    if (c.out) Object.assign(order, { out: c.out, back: c.back, fare_hkd: amount(c.fare_hkd), option_id: c.option_id });
+    if (pick(c.seat, SEATS)) order.seat = c.seat;
+    if (pick(c.seat_area, SEAT_AREAS)) order.seat_area = c.seat_area;
+    if (c.seat_number !== undefined) order.seat_number = seatNumber(c.seat_number);
+    if (pick(c.meal, MEALS)) order.meal = c.meal;
+    if (c.extra_bags !== undefined) Object.assign(order, { extra_bags: bags(c.extra_bags), extras_hkd: bags(c.extra_bags) * (store.fees.extra_bag_hkd ?? 0) });
+    order.total_hkd = order.fare_hkd + (order.extras_hkd ?? 0);
+    const difference = order.total_hkd - before;
+    if (order.status === 'held') order.due_hkd = order.total_hkd;
+    else if (difference > 0) {
+      order.due_hkd = difference;
+      store.paidEvents.delete(order.ref);   // so the payment of the difference is taken like a first payment
+      setOrderStatus(order.ref, 'held');
+    }
+    order.changed = (order.changed ?? 0) + 1;
+    return send(res, 200, { ...order, difference_hkd: difference });
   }
 
   return send(res, 404, { error: 'not found' });

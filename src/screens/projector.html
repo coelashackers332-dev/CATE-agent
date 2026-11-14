@@ -137,7 +137,7 @@
     add(log, row);
   }
   const mark = (ok) => (ok === false ? '✗ ' : ok === true ? '✓ ' : '');
-  const SCREENS = { options_page: 'Trip page', pay_email: 'Pay email', sms: 'Text message', knowledge: 'Cathay knowledge' };
+  const SCREENS = { options_page: 'Trip page', pay_email: 'Pay email', pay_page: 'Pay page', sms: 'Text message', knowledge: 'Cathay knowledge', tier: 'Membership tier', request: 'Special request' };
 
   // Whatever address an event carries, only a trip page's path is kept, so the phone always loads from this server.
   function tripPath(url) {

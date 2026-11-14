@@ -12,6 +12,7 @@ export const store = {
   /** @type {object[]} mock Orders system: seeded flown orders + holds made by calls */ orders: [],
   /** @type {object[]} mock Schedule system */ flights: [],
   /** @type {object[]} */ fares: [],
+  /** illustrative fees, e.g. { extra_bag_hkd } */ fees: {},
   /** view-only trip pages: code → { member_id, options, ref, expires } */ pages: new Map(),
   /** verification sessions: token → { member_id, call_id } */ sessions: new Map(),
   /** payment event ids already processed (Stripe can resend) */ paidEvents: new Set(),
@@ -23,6 +24,7 @@ export const store = {
     this.orders = seed('orders');
     this.flights = seed('flights');
     this.fares = seed('fares');
+    this.fees = seed('fees');
     this.pages.clear();
     this.sessions.clear();
     this.paidEvents.clear();

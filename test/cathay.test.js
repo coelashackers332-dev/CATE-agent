@@ -77,13 +77,13 @@ test('without the service key the mock is not there at all', async () => {
 test('the profile is the model-safe shape: no phone, email or delegate contacts', async () => {
   const profile = await cathay.getProfile(await verified());
   assert.deepEqual(profile, {
-    name: 'WONG TAK MING', language: 'en', speech: { pace: 'slow' },
-    prefs: { seat: 'window', meal: 'vegetarian', bags: 1, earliest_departure: '09:00' },
+    name: 'WONG TAK MING', tier: 'Gold', passport_on_file: true, language: 'en', speech: { pace: 'slow' },
+    prefs: { seat: 'window', seat_area: 'front', meal: 'vegetarian', bags: 1, earliest_departure: '09:00' },
     needs: { walk_in_cabin: true, stairs: true, long_distance: false },
     has_delegate: true,
   });
   const text = JSON.stringify(profile);
-  for (const secret of [wong().phone, wong().email, wong().delegates[0].phone, wong().delegates[0].email, 'Daniel']) {
+  for (const secret of [wong().phone, wong().email, wong().delegates[0].phone, wong().delegates[0].email, 'Daniel', wong().passport.number]) {
     assert.ok(!text.includes(secret), secret);
   }
 });
@@ -111,7 +111,7 @@ test('hold adds an order for the token\'s member; the first reference is K7Q2XM'
   const token = await verified();
   const created = await cathay.holdOrder(token, { ...(await vancouverOrder()), member_id: 'SOMEONE-ELSE', status: 'paid' });
   assert.equal(created.ref, 'K7Q2XM');
-  assert.equal(store.orders.length, 2);
+  assert.equal(store.orders.length, 3);   // 2 seeded flown trips (two members) + this hold
   const stored = store.orders.at(-1);
   assert.equal(stored.member_id, 'DEMO-0001');
   assert.equal(stored.status, 'held');
@@ -125,7 +125,7 @@ test('hold refuses a flight that is not in the schedule', async () => {
   const order = await vancouverOrder();
   order.out = { ...order.out, flight: 'CX9999' };
   await assert.rejects(cathay.holdOrder(await verified(), order), /422/);
-  assert.equal(store.orders.length, 1);
+  assert.equal(store.orders.length, 2);
 });
 
 test('every adapter call emits exactly one system event, with no phone number or email in it', async () => {

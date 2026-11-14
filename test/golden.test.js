@@ -34,11 +34,15 @@ test('golden path: scripted call, the member pays, confirmed trip page', async (
     assert.equal(order.status, 'held');
     assert.deepEqual(order.ssr, ['WCHR']);
     assert.equal(order.passenger, 'WONG TAK MING');
-    assert.equal(order.fare_hkd, 8420);
+    assert.equal(order.out.city, 'Osaka');
+    assert.equal(order.seat_number, '21A');
+    assert.equal(order.extra_bags, 1);
+    assert.equal(order.requests.length, 1);
+    assert.equal(order.total_hkd, order.fare_hkd + 500, 'fare + 1 extra bag');
 
     const code = store.activeCall.pageCode;
     const held = await (await fetch(`${base}/v/${code}`)).text();
-    assert.match(held, /8,420/);
+    assert.match(held, new RegExp(order.fare_hkd.toLocaleString('en-US')));
     assert.doesNotMatch(held, /K7Q2XM[\s\S]*show this card/i);
 
     // Without the admin key nothing changes; the operator's /dev/pay pays the held booking.
@@ -53,11 +57,13 @@ test('golden path: scripted call, the member pays, confirmed trip page', async (
     assert.match(paid, /K7Q2XM/);
     assert.match(paid, /WCHR/);
     assert.match(paid, /show this card/i);
+    assert.match(paid, /<dt>Seat<\/dt><dd>21A<\/dd>/);
+    assert.match(paid, /1 extra checked bag/);
 
     // Tools ran in the order the rules require.
     const tools = events.filter((e) => e.kind === 'tool_call').map((e) => e.name);
     assert.deepEqual(tools, ['verify_caller', 'apply_profile', 'find_flights', 'text_options',
-      'choose_option', 'set_preferences', 'set_assistance', 'hold_booking', 'hold_booking', 'send_pay_link']);
+      'choose_option', 'set_preferences', 'set_assistance', 'set_baggage', 'set_special_request', 'hold_booking', 'hold_booking', 'send_pay_link']);
     // No phone number or email address ever reaches the projector.
     const feed = JSON.stringify(events);
     assert.doesNotMatch(feed, /\+852\d{8}/);

@@ -2,7 +2,7 @@
 import { test, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { store } from '../src/store.js';
+import { store, setOrderStatus } from '../src/store.js';
 import { bus } from '../src/events.js';
 import { config } from '../src/config.js';
 import { createCathay } from '../src/cathay.js';
@@ -65,8 +65,8 @@ const run = (name, args) => tools.runTool(name, args, call);
 const VANCOUVER = { to: 'Vancouver', after: '2027-02-06', before: '2027-04-05' };
 const verify = () => run('verify_caller', { answer: 'Osaka, last May' });
 
-test('specs: the 10 tools, each with a description and a JSON Schema', () => {
-  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'choose_option', 'set_preferences', 'set_assistance', 'hold_booking', 'send_pay_link', 'ask_cathay']);
+test('specs: the 14 tools, each with a description and a JSON Schema', () => {
+  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'choose_option', 'set_preferences', 'set_baggage', 'set_special_request', 'set_assistance', 'hold_booking', 'send_pay_link', 'find_booking', 'change_booking', 'ask_cathay']);
   for (const s of tools.specs) {
     assert.ok(s.description.length > 40, s.name);
     assert.equal(s.inputSchema.type, 'object');
@@ -86,7 +86,7 @@ test('golden path: verify → profile → flights → text → assistance → ho
   // 2. profile: the shape in DATA.md §4
   const { profile } = await run('apply_profile', {});
   assert.equal(profile.name, 'WONG TAK MING');
-  assert.deepEqual(profile.prefs, { seat: 'window', meal: 'vegetarian', bags: 1, earliest_departure: '09:00' });
+  assert.deepEqual(profile.prefs, { seat: 'window', seat_area: 'front', meal: 'vegetarian', bags: 1, earliest_departure: '09:00' });
   assert.equal(profile.has_delegate, true);
   assert.deepEqual(profile.recent_trips, [{ to: 'Osaka', month: '2026-05', status: 'flown', ssr: ['WCHR'], assistance: 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat.' }]);
 
@@ -114,28 +114,34 @@ test('golden path: verify → profile → flights → text → assistance → ho
   // 5. his answers, one tool each: every result says the answer back and gives the one next question
   const chosen = await run('choose_option', { option_id: '1' });
   assert.equal(chosen.confirm, 'The first option: Friday 19 February at 11:40 am, direct, 8,420 Hong Kong dollars return.');
-  assert.match(chosen.next, /Your membership has a window seat and a vegetarian meal\. Is that still right\?/);
+  assert.match(chosen.next, /Your membership has a window seat near the front of the cabin and a vegetarian meal\. Is that still right\?/);
   const kept = await run('set_preferences', { seat_ok: true, meal_ok: true });
-  assert.equal(kept.confirm, 'A window seat and a vegetarian meal, as on your membership.');
+  assert.equal(kept.confirm, 'A window seat near the front of the cabin and a vegetarian meal, as on your membership.');
   assert.match(kept.next, /On your Osaka trip we arranged this: Wheelchair from check-in to the gate\. .* Would you like the same help again\?/);
   // assistance: "like Osaka?" → the SSR of the latest flown order
   const same = await run('set_assistance', { same_as_last_trip: true });
   assert.equal(same.code, 'WCHR');
   assert.deepEqual(call.assistance, { code: 'WCHR', summary: 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat.' });
+  // then baggage (with the fee from the Orders system) and anything else to arrange, one question each
+  assert.match(same.next, /Your membership has 1 checked bag\. Would you like any extra baggage\? It is 500 Hong Kong dollars a bag\?/);
+  const noBags = await run('set_baggage', { extra_bags: 0 });
+  assert.equal(noBags.confirm, 'No extra baggage.');
+  assert.match(noBags.next, /Is there anything else we should arrange for this trip/);
+  const nothing = await run('set_special_request', { none: true });
   // the member pays himself: nobody is asked who pays, the read-back comes next
-  assert.match(same.next, /call hold_booking now, in this same turn/);
-  assert.doesNotMatch(same.next, /Daniel|who pays/);
+  assert.match(nothing.next, /call hold_booking now, in this same turn/);
+  assert.doesNotMatch(nothing.next, /Daniel|who pays/);
 
   // 6. hold: read-back first, then the hold
   const first = await run('hold_booking', { option_id: '1' });
   assert.equal(first.needs_confirmation, true);
   assert.equal(first.ref, undefined);
-  assert.equal(first.readback, 'Let me read it all back to you. Nothing is booked until you say yes. Booking for Wong Tak Ming. Hong Kong to Vancouver, flight CX0V1, Friday 19 February, leaving at 11:40 am. '
-    + 'Coming back on flight CX0V2, Wednesday 31 March, leaving at 1:30 pm. Window seat, vegetarian meal. '
+  assert.equal(first.readback, 'Let me read it all back to you. Nothing is booked until you say yes. Booking for Wong Tak Ming, with the passport on your membership. Hong Kong to Vancouver, flight CX0V1, Friday 19 February, leaving at 11:40 am. '
+    + 'Coming back on flight CX0V2, Wednesday 31 March, leaving at 1:30 pm. A window seat near the front of the cabin, a vegetarian meal. '
     + 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat. '
     + 'The total is 8,420 Hong Kong dollars for the return trip. The pay request will come to your own phone. Shall I hold this booking?');
   assert.deepEqual(call.pendingHold, { option_id: '1' });
-  assert.equal(store.orders.length, 1);
+  assert.equal(store.orders.length, 2);
 
   const held = await run('hold_booking', { option_id: '1', caller_confirmed: true });
   assert.equal(held.ok, true);
@@ -146,11 +152,13 @@ test('golden path: verify → profile → flights → text → assistance → ho
   assert.deepEqual(store.orders.at(-1), {
     ref: 'K7Q2XM', member_id: 'DEMO-0001', status: 'held', option_id: '1',
     out: found.options[0].out, back, fare_hkd: 8420,
-    cabin: 'economy', seat: 'window', meal: 'vegetarian', ssr: ['WCHR'], payer: 'Wong Tak Ming', passenger: 'WONG TAK MING',
+    cabin: 'economy', seat: 'window', seat_area: 'front', meal: 'vegetarian',
+    extra_bags: 0, extras_hkd: 0, total_hkd: 8420, due_hkd: 8420, requests: [],
+    ssr: ['WCHR'], passport: 'HKG passport ending 478', payer: 'Wong Tak Ming', passenger: 'WONG TAK MING',
   });
   assert.equal(store.pages.get(call.pageCode).ref, 'K7Q2XM');
   assert.equal((await run('hold_booking', { option_id: '2', caller_confirmed: true })).ref, 'K7Q2XM', 'one hold per call');
-  assert.equal(store.orders.length, 2);
+  assert.equal(store.orders.length, 3);
 
   // 7. pay request (PAYMENT=sms): only to his own number on file, whatever the model passes; nothing to the family
   assert.equal((await run('send_pay_link', { to: 'someone@else.example' })).sent_to, 'his own phone');
@@ -162,9 +170,9 @@ test('golden path: verify → profile → flights → text → assistance → ho
   // events: one tool_call + one tool_result per run, system lines from the adapter, screens from the tools
   const kinds = (k) => events.filter((e) => e.kind === k);
   assert.equal(kinds('tool_call').length, kinds('tool_result').length);
-  assert.equal(kinds('tool_call').length, 12);
+  assert.equal(kinds('tool_call').length, 14);
   assert.deepEqual(kinds('tool_call')[3].args, {}, 'undeclared inputs are dropped');
-  assert.deepEqual(kinds('screen').map((e) => e.what), ['sms', 'options_page', 'sms']);
+  assert.deepEqual(kinds('screen').map((e) => e.what), ['tier', 'sms', 'options_page', 'sms']);
   assert.ok(events.every((e) => e.call_id === 'c1'));
   assert.ok(kinds('system').some((e) => e.summary === 'K7Q2XM · WCHR'));
   const text = JSON.stringify(events);
@@ -208,6 +216,7 @@ test('set_assistance: missing answers are asked for, not guessed', async () => {
   assert.equal(call.assistance, null);
   // "same as last time" with nothing on file → ask the questions
   store.orders[0].ssr = [];
+  call.profile = null;   // read again, as on a new call
   assert.equal((await run('set_assistance', { same_as_last_trip: true })).ok, false);
   assert.equal(call.assistance, null);
 });
@@ -272,7 +281,7 @@ test('hold_booking without a read-back confirmation creates nothing', async () =
   // an option that was never offered
   assert.equal((await run('hold_booking', { option_id: '7', caller_confirmed: true })).ok, false);
 
-  assert.equal(store.orders.length, 1);
+  assert.equal(store.orders.length, 2, 'only the 2 seeded trips');
   assert.equal(call.ref, null);
   assert.equal((await run('send_pay_link', {})).ok, false, 'no pay request without a hold');
   assert.equal(sent.email.length, 0);
@@ -358,8 +367,9 @@ test('the member always pays himself: no who-pays question, no set_payer tool, n
   await run('find_flights', VANCOUVER);
   await run('choose_option', { option_id: '1' });
   // a wish for another seat or meal is recorded and answered honestly, never invented
-  const change = await run('set_preferences', { seat_ok: true, meal_ok: false });
-  assert.equal(change.confirm, 'I will keep the window seat. On this call I can only book the vegetarian meal on your membership. A member of staff can change the meal after booking.');
+  assert.match((await run('set_preferences', { seat_ok: true, meal_ok: false })).error, /Ask which meal/, 'a different meal is asked for, never guessed');
+  const change = await run('set_preferences', { seat_ok: true, meal_ok: false, meal: 'vegan' });
+  assert.equal(change.confirm, 'A window seat near the front of the cabin and a vegan meal.');
   await run('set_assistance', { same_as_last_trip: true });
   assert.equal((await run('set_payer', { payer: 'family' })).ok, false, 'there is no set_payer tool any more');
   const first = await run('hold_booking', {});
@@ -432,4 +442,153 @@ test('PAYMENT=page: the options go to his trip page at once, the hold opens the 
   assert.equal(pay.already_sent, true);
   assert.equal(sent.email.length, 0);
   assert.equal(sent.sms.length, 2, 'no "Reply PAY" text');
+});
+
+// ---- GAME-PLAN 2026-11-15: tier gate, seat, meal, baggage, special requests, managing a booking
+
+const CHAN = '+85200000003';   // seeded Green member, no assistance need, last flew to Taipei
+
+test('tier gate: a Green member without an assistance need is refused after verification, and gets nothing', async () => {
+  call = newCall('c1', CHAN);
+  const result = await run('verify_caller', { answer: 'Taipei' });
+  assert.equal(result.ok, false);
+  assert.equal(result.verified, false);
+  assert.match(result.error, /Gold members and above/);
+  assert.equal(call.verified, false);
+  assert.equal(call.token, null);
+  assert.equal((await run('find_flights', { to: 'Osaka', after: '2026-12-25', before: '2027-01-01' })).ok, false, 'no tool works after a refusal');
+  assert.ok(events.some((e) => e.kind === 'screen' && e.what === 'tier' && /Green member: CATE is for Gold/.test(e.summary)));
+});
+
+test('tier gate: a Green member with a registered assistance need gets CATE; Gold always does', async () => {
+  store.members[1].needs.long_distance = false;   // Ms Chan registers that she cannot walk long distances
+  call = newCall('c1', CHAN);
+  assert.equal((await run('verify_caller', { answer: 'Taipei' })).verified, true);
+  call = newCall('c2');
+  assert.equal((await verify()).verified, true);
+  const profile = await run('apply_profile', {});
+  assert.equal(profile.profile.tier, 'Gold');
+  assert.equal(profile.profile.passport_on_file, true);
+  assert.ok(!JSON.stringify(profile).includes(store.members[0].passport.number), 'the passport number never reaches the model');
+  assert.match(profile.next, /as a Gold member, and ask which service he would like today: book a flight, change a booking/);
+});
+
+/** Verified, Vancouver searched, option chosen, seat and meal kept, wheelchair as last time. */
+async function upToAssistance(option = '1') {
+  await verify();
+  await run('find_flights', VANCOUVER);
+  await run('choose_option', { option_id: option });
+  await run('set_preferences', { seat_ok: true, meal_ok: true });
+  await run('set_assistance', { same_as_last_trip: true });
+}
+
+test('seat: window or aisle, cabin area, or a seat number; a seat that does not exist is refused', async () => {
+  await verify();
+  await run('find_flights', VANCOUVER);
+  await run('choose_option', { option_id: '1' });
+  assert.match((await run('set_preferences', { seat_ok: false, meal_ok: true })).error, /window or aisle, front, middle or back/);
+  assert.match((await run('set_preferences', { seat_ok: false, meal_ok: true, seat_number: '99Z' })).error, /not a seat on our planes/);
+  assert.equal((await run('set_preferences', { seat_ok: false, meal_ok: true, seat: 'aisle', seat_area: 'back' })).confirm, 'An aisle seat near the back of the cabin and a vegetarian meal.');
+  assert.equal((await run('set_preferences', { seat_ok: false, meal_ok: true, seat_number: '21 a' })).confirm, 'Seat 21A and a vegetarian meal.');
+  await run('set_assistance', { same_as_last_trip: true });
+  assert.match((await run('hold_booking', {})).readback, /Seat 21A, a vegetarian meal\./);
+  await run('hold_booking', { caller_confirmed: true });
+  assert.equal(store.orders.at(-1).seat_number, '21A');
+});
+
+test('baggage and special requests: priced by the Orders system, read back, and on the booking', async () => {
+  await upToAssistance();
+  assert.match((await run('set_baggage', { extra_bags: 5 })).error, /from 0 to 3/);
+  const bags = await run('set_baggage', { extra_bags: 2 });
+  assert.equal(bags.confirm, '2 extra checked bags, 1,000 Hong Kong dollars.');
+  assert.match((await run('set_special_request', {})).error, /anything else we should arrange/);
+  const request = await run('set_special_request', { request: 'It is my wife\'s 70th birthday on the flight' });
+  assert.match(request.confirm, /noted that for our staff: It is my wife's 70th birthday on the flight\. I have passed it to our team\./);
+  assert.match(request.next, /call hold_booking now/);
+  const oxygen = await run('set_special_request', { request: 'I travel with a portable oxygen concentrator' });
+  assert.match(oxygen.confirm, /needs Cathay's approval before the flight/);
+  const first = await run('hold_booking', {});
+  assert.match(first.readback, /2 extra checked bags, 1,000 Hong Kong dollars\. Noted for our staff: It is my wife's 70th birthday on the flight; I travel with a portable oxygen concentrator\. The total is 9,420 Hong Kong dollars/);
+  await run('hold_booking', { caller_confirmed: true });
+  const order = store.orders.at(-1);
+  assert.deepEqual([order.extra_bags, order.extras_hkd, order.total_hkd, order.due_hkd], [2, 1000, 9420, 9420]);
+  assert.equal(order.requests.length, 2);
+});
+
+test('baggage and requests are asked once but never block the hold', async () => {
+  await upToAssistance();
+  const first = await run('hold_booking', {});
+  assert.equal(first.needs_confirmation, true);
+  assert.match(first.readback, /The total is 8,420 Hong Kong dollars/);
+});
+
+/** Books option `option` for Mr Wong on call c1 and marks it paid, as after the pay page. Returns its ref. */
+async function bookedAndPaid(option) {
+  await upToAssistance(option);
+  await run('hold_booking', {});
+  const { ref } = await run('hold_booking', { caller_confirmed: true });
+  setOrderStatus(ref, 'paid');
+  store.paidEvents.add(ref);
+  call = newCall('c2');   // a later call
+  await verify();
+  return ref;
+}
+
+test('change booking: new dates that cost more put the difference on the pay page; nothing changes before a yes', async () => {
+  config.payment = 'page';
+  const ref = await bookedAndPaid('3');   // 6,900 via Tokyo
+  const found = await run('find_booking', {});
+  assert.equal(found.bookings.length, 1);
+  assert.match(found.say, /Vancouver, leaving Friday 19 February/);
+  await run('find_flights', VANCOUVER);
+  const chose = await run('choose_option', { option_id: '1' });   // tapped on the trip page, or said
+  assert.match(chose.next, new RegExp(`change_booking now for booking ${ref} with option_id 1`));
+  const preview = await run('change_booking', { ref, option_id: '1' });
+  assert.equal(preview.needs_confirmation, true);
+  assert.match(preview.readback, /New flights: leaving Friday 19 February at 11:40 am.*It costs 1,520 Hong Kong dollars more, which you pay on the payment page on your phone\. Shall I make this change\?$/);
+  assert.equal(store.orders.find((o) => o.ref === ref).fare_hkd, 6900, 'nothing changed yet');
+  assert.equal((await run('change_booking', { ref, option_id: '2', caller_confirmed: true })).needs_confirmation, true, 'a yes to another change is not a yes');
+  await run('change_booking', { ref, option_id: '1' });
+  const done = await run('change_booking', { ref, option_id: '1', caller_confirmed: true });
+  assert.equal(done.status, 'held');
+  assert.equal(done.due_hkd, 1520);
+  const order = store.orders.find((o) => o.ref === ref);
+  assert.deepEqual([order.status, order.fare_hkd, order.total_hkd, order.due_hkd, order.out.flight], ['held', 8420, 8420, 1520, 'CX0V1']);
+  assert.equal(call.payRequested, 'his trip page');
+  assert.equal(store.pages.get(call.pageCode).ref, ref, 'his trip page now goes to the pay page');
+  assert.match(sent.sms.at(-1).body, new RegExp(`booking ${ref} has been changed\\nPay the difference of 1,520 HKD`));
+  assert.ok(!store.paidEvents.has(ref), 'the difference can be paid');
+});
+
+test('change booking: a seat, meal or bag change on a paid booking; cheaper or free stays paid', async () => {
+  const ref = await bookedAndPaid('1');   // 8,420
+  await run('find_booking', {});
+  assert.match((await run('change_booking', { ref })).error, /what he would like to change/);
+  assert.match((await run('change_booking', { ref: 'ZZZZZZ', meal: 'vegan' })).error, /not one of his bookings/);
+  const preview = await run('change_booking', { ref, seat_number: '12C', meal: 'vegan' });
+  assert.match(preview.readback, /Seat: seat 12C\. Meal: vegan\. The price stays the same\./);
+  const done = await run('change_booking', { ref, seat_number: '12C', meal: 'vegan', caller_confirmed: true });
+  assert.equal(done.status, 'paid');
+  const order = store.orders.find((o) => o.ref === ref);
+  assert.deepEqual([order.seat_number, order.meal, order.status], ['12C', 'vegan', 'paid']);
+  // a bag on a paid booking costs the fee: held again, with the fee due
+  await run('find_booking', {});
+  assert.match((await run('change_booking', { ref, extra_bags: 1 })).readback, /Baggage: 1 extra checked bag\. It costs 500 Hong Kong dollars more/);
+  const bag = await run('change_booking', { ref, extra_bags: 1, caller_confirmed: true });
+  assert.equal(bag.status, 'held');
+  assert.equal(store.orders.find((o) => o.ref === ref).due_hkd, 500);
+});
+
+test('change booking: another member\'s booking, or a flight to another city, cannot be changed', async () => {
+  const ref = await bookedAndPaid('1');
+  call = newCall('c3', CHAN);
+  store.members[1].needs.long_distance = false;
+  await run('verify_caller', { answer: 'Taipei' });
+  assert.deepEqual((await run('find_booking', {})).bookings, []);
+  assert.match((await run('change_booking', { ref, meal: 'vegan' })).error, /not one of his bookings/);
+  call = newCall('c4');
+  await verify();
+  await run('find_booking', {});
+  await run('find_flights', { to: 'Osaka', after: '2026-12-25', before: '2027-01-01' });
+  assert.match((await run('change_booking', { ref, option_id: '1' })).error, /not to Vancouver/);
 });

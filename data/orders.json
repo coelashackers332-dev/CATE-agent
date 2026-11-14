@@ -11,5 +11,18 @@
     "seat": "window",
     "meal": "vegetarian",
     "ssr": ["WCHR"]
+  },
+  {
+    "ref": "T9M3QA",
+    "member_id": "DEMO-0002",
+    "status": "flown",
+    "segments": [
+      { "flight": "CX0T1", "from": "HKG", "to": "TPE", "city": "Taipei", "date": "2026-08-03" },
+      { "flight": "CX0T2", "from": "TPE", "to": "HKG", "city": "Hong Kong", "date": "2026-08-07" }
+    ],
+    "cabin": "economy",
+    "seat": "aisle",
+    "meal": "standard",
+    "ssr": []
   }
 ]

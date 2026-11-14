@@ -22,41 +22,49 @@ export function startSession({ call, runTool, emit }) {
 
   async function play() {
     const script = [
-      () => say("Hello, this is CATE, Cathay's automated travel assistant. To check it's you: where did you last fly with us?"),
+      () => say("Hello, this is CATE, Cathay's personal booking service. To check it's you: where did you last fly with us?"),
       () => hear('Osaka, last May.'),
       async () => {
         const v = await tool('verify_caller', { answer: 'Osaka, last May' });
         if (!v.verified) throw new Error('verification did not pass');
         await tool('apply_profile');
-        say('Thank you, Mr Wong. Where would you like to go?');
+        say('Thank you, Mr Wong. Which service would you like today: book a flight, change a booking, or a special request?');
       },
-      () => hear('I want to visit my daughter in Vancouver after Chinese New Year, back before Ching Ming. Window seat, not too early.'),
+      () => hear('Book a flight. Osaka again, after Christmas, back before New Year.'),
       async () => {
-        const found = await tool('find_flights', { to: 'Vancouver', after: '2027-02-06', before: '2027-04-05' });
+        const found = await tool('find_flights', { to: 'Osaka', after: '2026-12-25', before: '2027-01-01' });
         call.scriptChoice = found.options[0].id;
         for (const line of [...lines(found.read_out), ...lines(found.return_flight)]) say(line);
-        say('Shall I text these to you?');
+        say(/trip page/.test(found.next) ? 'They are also on your trip page, in the email I just sent. Which one would you like?' : 'Shall I text these to you?');
+        call.scriptSent = /trip page/.test(found.next);
       },
-      () => hear('Yes, please.'),
-      async () => { await tool('text_options'); say("I'm texting you now. Which one would you like?"); },
-      () => hear('The first one.'),
-      async () => { say((await tool('choose_option', { option_id: call.scriptChoice })).confirm); await tool('set_preferences', { seat_ok: true, meal_ok: true }); },
-      () => say('Wheelchair to the gate, like your Osaka trip?'),
-      () => hear('Yes, please.'),
-      async () => { const a = await tool('set_assistance', { same_as_last_trip: true }); say(a.summary); },
       async () => {
+        if (call.scriptSent) return;
+        hear('Yes, please.');
+        await tool('text_options');
+        say("I'm texting you now. Which one would you like?");
+      },
+      () => hear('The first one.'),
+      async () => { say((await tool('choose_option', { option_id: call.scriptChoice })).confirm); say('Your membership has a window seat near the front and a vegetarian meal. Is that still right?'); },
+      () => hear('Seat 21A this time, please. The meal is fine.'),
+      async () => { say((await tool('set_preferences', { seat_ok: false, meal_ok: true, seat_number: '21A' })).confirm); say('On your Osaka trip we arranged a wheelchair to the gate. The same again?'); },
+      () => hear('Yes, please.'),
+      async () => { const a = await tool('set_assistance', { same_as_last_trip: true }); say(a.summary); say('Would you like any extra baggage?'); },
+      () => hear('One extra bag.'),
+      async () => { say((await tool('set_baggage', { extra_bags: 1 })).confirm); say('Is there anything else we should arrange for this trip?'); },
+      () => hear("It's my wife's birthday on the 26th."),
+      async () => {
+        say((await tool('set_special_request', { request: "His wife's birthday on 26 December" })).confirm);
         const first = await tool('hold_booking', {});
         for (const line of lines(first.readback)) say(line);
-        say('Is that right?');
       },
       () => hear('Yes.'),
       async () => {
         const held = await tool('hold_booking', { caller_confirmed: true });
         say(`Your booking is held. Your reference is ${held.ref_spoken}.`);
-      },
-      async () => {
+        if (held.sent_to) { say("The payment page is now open on your phone. I'll stay on the line."); return; }
         const sent = await tool('send_pay_link');
-        say(sent.sent_to === 'his trip page' ? "The payment page is now open on your phone. I'll stay on the line." : `I've sent the pay request to ${sent.sent_to}. I'll stay on the line.`);
+        say(`I've sent the pay request to ${sent.sent_to}. I'll stay on the line.`);
       },
     ];
     for (const step of script) {

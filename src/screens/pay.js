@@ -140,7 +140,7 @@ const top = (h1, lede) => `<header class="top">
  * to the same address. `error` is shown above the ways to pay (e.g. when none was chosen). `nonce` must match the CSP.
  */
 export function renderPayPage({ order, code, nonce, error = '' }) {
-  const amount = money(order.fare_hkd);
+  const amount = money(order.due_hkd ?? order.total_hkd ?? order.fare_hkd);   // a changed booking: only the difference
   const methods = METHODS.map((m) => `<label class="method">
         <input type="radio" name="method" value="${esc(m.id)}" required>
         <span><span class="name">${esc(m.label)}</span>${m.note ? `<span class="note">${esc(m.note)}</span>` : ''}</span>
@@ -177,7 +177,7 @@ export function renderPaidPage({ order, code, nonce }) {
   const trip = `/v/${encodeURIComponent(code)}`;
   const how = METHODS.some((m) => m.label === order.paid_with) ? ` with ${order.paid_with}` : '';
   const thanks = self || !firstName(order.payer) ? 'Thank you.' : `Thank you, ${firstName(order.payer)}.`;
-  return shell('Payment successful', `${top('Payment successful', `${money(order.fare_hkd)} paid${how}.`)}
+  return shell('Payment successful', `${top('Payment successful', `${money(order.due_hkd ?? order.total_hkd ?? order.fare_hkd)} paid${how}.`)}
 <div class="sec">
   <p class="status" role="status"><b>${esc(thanks)}</b>Going back to the trip page in ${BACK_AFTER_S} seconds.</p>
   <a class="pay" href="${esc(trip)}">Back to the trip</a>

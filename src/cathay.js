@@ -101,6 +101,31 @@ export function createCathay({ base = `http://127.0.0.1:${config.port}`, callId 
       return { result: found, ok: found.out.length > 0, summary: `${found.out.length} flights out · ${found.back.length} back` };
     }),
 
+    /** → { extra_bag_hkd }: illustrative fees for extras. No token needed. */
+    getFees: () => step('Orders', 'fees', async () => {
+      const fees = need(await http('GET', '/fees'));
+      return { result: fees, summary: `extra bag ${fees.extra_bag_hkd ?? '?'} HKD` };
+    }),
+
+    /**
+     * → his bookings that can still be changed (held or paid, not flown), newest first:
+     * [{ ref, city, out, back, status, seat, seat_area, seat_number, meal, extra_bags, total_hkd }]. Throws without a valid token.
+     */
+    getBookings: (token) => step('Orders', 'bookings to manage', async () => {
+      const orders = need(await http('GET', '/orders?member=me', { token })).filter((o) => o.out && ['held', 'paid'].includes(o.status));
+      const result = orders.map(({ ref, out, back, status, seat, seat_area, seat_number, meal, extra_bags, total_hkd, fare_hkd }) => ({
+        ref, city: out.city, out, back, status, seat, seat_area, seat_number, meal, extra_bags: extra_bags ?? 0, fare_hkd, total_hkd: total_hkd ?? fare_hkd,
+      }));
+      return { result, summary: result.map((o) => `${o.ref} ${o.out.from}→${o.out.to} ${o.out.dep.slice(0, 10)} · ${o.status}`).join(' | ') || 'none' };
+    }),
+
+    /** → the changed order with `difference_hkd`. A paid booking that now costs more is held again, with the difference due. */
+    changeOrder: (token, ref, change) => step('Orders', `change ${ref} (OrderChange)`, async () => {
+      const r = await http('POST', `/orders/${encodeURIComponent(ref)}/change`, { token, body: change });
+      const changed = need(r);
+      return { result: changed, summary: `${changed.ref} · ${changed.status} · difference ${changed.difference_hkd} HKD` };
+    }),
+
     /** → the created order, including `ref`. An unpaid hold; the wheelchair code travels as an SSR. */
     holdOrder: (token, order) => step('Orders', 'hold (OrderCreate)', async () => {
       const created = need(await http('POST', '/orders', { token, body: order }));

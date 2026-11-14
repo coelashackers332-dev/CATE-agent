@@ -295,7 +295,7 @@ test('bookedEmail: booked, the needs for staff, and the trip page link', () => {
   assert.ok(m.subject.includes('K7Q2XM') && /booked/i.test(m.subject));
   assert.ok(m.html.includes(`href="${link}"`) && m.html.includes('>Open your needs card</a>'));
   for (const body of [m.html, m.text]) {
-    for (const t of ['Daniel paid', 'K7Q2XM', 'WONG TAK MING', 'CX0V1', 'Friday 19 February', 'Wednesday 31 March', 'Wheelchair from check-in to the gate', 'WCHR', 'Please speak slowly', 'Window seat', 'Vegetarian meal']) {
+    for (const t of ['Daniel paid', 'K7Q2XM', 'WONG TAK MING', 'CX0V1', 'Friday 19 February', 'Wednesday 31 March', 'Wheelchair from check-in to the gate', 'WCHR', 'Please speak slowly', 'Window', 'Vegetarian']) {
       assert.ok(body.includes(t), `missing ${t}`);
     }
   }
