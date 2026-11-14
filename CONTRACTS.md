@@ -132,10 +132,11 @@ export function payEmail({ order, travellerName, payerName, payUrl }) → { subj
 // src/screens/trip.js
 export function renderTripPage({ page, order, profile, now }) → string   // full HTML; states: options | confirmed (+ needs card) | ended
 export function notFoundPage() → string
-// src/screens/pay.js  (the pay page; Harell's screen, design with Cavell)
+// src/screens/pay.js  (the pay page; Harell's screen, in Cavell's design)
 export const METHODS → [{ id, label, note? }]        // card, Apple Pay, Google Pay, FPS, PayMe, AlipayHK, Octopus
-export function renderPayPage({ order, code, nonce, error }) → string   // held: trip, amount, methods, one Pay button
-export function renderPaidPage({ order, code, nonce }) → string         // paid: receipt + link to /v/:code
+export const BACK_AFTER_S = 3
+export function renderPayPage({ order, code, nonce, error }) → string   // held: amount, the trip in one line, methods, one Pay button
+export function renderPaidPage({ order, code, nonce }) → string         // paid: "Payment successful", back to /v/:code after BACK_AFTER_S s (and a button)
 // src/payment.js  (server side)
 export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref,'paid'), order.paid_with = source, notify the live session, then text 2
 payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
@@ -149,7 +150,7 @@ payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
 | `WS /twilio/stream` | Twilio | one-time token passed as `<Parameter>`, checked in `start` |
 | `POST /twilio/sms` | Twilio | signature; `PAY` only from the delegate's number, only while held |
 | `GET /v/:code` | Mr Wong, Daniel | random code; read-only; headers `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
-| `GET /pay/:code`, `POST /pay/:code` | the payer: Mr Wong (Pay button on his trip page) or Daniel (pay email) | the trip page's random code; only while the booking is held (after payment, GET shows the receipt); POST takes one field `method` from `METHODS`, body ≤ 2 KB, then 303 back to GET; no card or personal fields; headers as `/v/` plus a nonce CSP and `X-Frame-Options: DENY` |
+| `GET /pay/:code`, `POST /pay/:code` | the payer: Mr Wong (Pay button on his trip page) or Daniel (pay email) | the trip page's random code; only while the booking is held (after payment, GET shows "Payment successful" and goes back to `/v/:code`); POST takes one field `method` from `METHODS`, body ≤ 2 KB, then 303 back to GET; no card or personal fields; headers as `/v/` plus a nonce CSP and `X-Frame-Options: DENY` |
 | `GET /projector` + `WS /events` | team laptop | admin secret (`?key=`) |
 | `POST /reset`, `POST /dev/simulate` | team laptop | admin secret (`x-admin-key` header) |
 | `/mock-cathay/*` | our own `cathay.js` | local only |

@@ -7,7 +7,7 @@ import { store, findOrder } from '../src/store.js';
 import { bus } from '../src/events.js';
 import { createApp } from '../src/server.js';
 import { createPayment } from '../src/payment.js';
-import { METHODS } from '../src/screens/pay.js';
+import { METHODS, BACK_AFTER_S } from '../src/screens/pay.js';
 
 Object.assign(config, { baseUrl: 'https://cate.test', adminSecret: 'test-admin', demoCallerNumber: '', danielPhone: '', danielEmail: '' });
 const CODE = 'pagecode-for-tests-0123456789';
@@ -83,11 +83,14 @@ test('a held booking\'s pay link shows the trip, the amount and every method, an
   const page = await read(res);
   assert.ok(nonce && page.includes(`<script nonce="${nonce}">`), 'the page script carries this response\'s nonce');
 
-  assert.match(page, /Pay for Wong Tak Ming's trip to Vancouver/);
-  assert.match(page, /K7Q2XM/);
-  assert.match(page, /Pay HKD 9,350/);
+  assert.match(page, /<h1>Pay for Wong Tak Ming's trip<\/h1>/);
+  assert.match(page, /Wong Tak Ming asked you to pay for these flights\./);
+  assert.match(page, /<h2>HKD 9,350<\/h2>/);
+  assert.match(page, /Hong Kong to Vancouver, Saturday 21 November\. Back Sunday 29 November\. Booking K7Q2XM\./, 'the trip in one line, no options to choose');
+  assert.match(page, /<button class="pay" type="submit">Pay HKD 9,350<\/button>/);
   for (const m of METHODS) assert.ok(page.includes(`value="${m.id}"`), `offers ${m.label}`);
   assert.doesNotMatch(page, /type="(text|number|tel|email|password)"|autocomplete="cc-/, 'no card or personal fields');
+  assert.doesNotMatch(page, /http-equiv="refresh"/, 'the pay page stays until the payer taps Pay');
   assert.equal(findOrder('K7Q2XM').status, 'held', 'opening the page pays nothing');
 });
 
@@ -112,7 +115,7 @@ test('the pay link is Not found for unknown and expired codes, bookings not held
   assert.equal(findOrder('K7Q2XM').status, 'held');
 });
 
-test('paying marks the booking paid once: the call hears it, then text 2, then the receipt', async () => {
+test('paying marks the booking paid once: the call hears it, then text 2; the page says so, then goes back to the trip', async () => {
   booking();
   store.activeCall = { id: 'call-1', session: { notify: (msg) => steps.push({ step: 'call told', msg }) } };
 
@@ -127,14 +130,15 @@ test('paying marks the booking paid once: the call hears it, then text 2, then t
   assert.equal(steps[1].body, 'BOOKED K7Q2XM');
   assert.deepEqual(paidLines().map((e) => [e.call_id, e.summary]), [['call-1', '✓ Daniel paid for K7Q2XM (Apple Pay)']]);
 
-  const receipt = await open();
-  assert.equal(receipt.status, 200);
-  const page = await read(receipt);
-  assert.match(page, /Payment received/);
+  const done = await open();
+  assert.equal(done.status, 200);
+  const page = await read(done);
+  assert.match(page, /<h1>Payment successful<\/h1>/);
   assert.match(page, /Thank you, Daniel\./);
-  assert.match(page, /Paid with Apple Pay for Wong Tak Ming's trip to Vancouver\. Booking reference K7Q2XM\./);
-  assert.match(page, /Wong Tak Ming gets the booking confirmation\./);
-  assert.ok(page.includes(`href="/v/${CODE}"`), 'links back to the trip page');
+  assert.match(page, /<b>HKD 9,350 paid with Apple Pay<\/b>Hong Kong to Vancouver, Saturday 21 November\. Back Sunday 29 November\. Booking K7Q2XM\./);
+  assert.match(page, /Wong Tak Ming gets the booking confirmation by email\./);
+  assert.ok(page.includes(`<meta http-equiv="refresh" content="${BACK_AFTER_S};url=/v/${CODE}">`), 'goes back to the trip page by itself');
+  assert.ok(page.includes(`href="/v/${CODE}"`), 'and has a button for it');
 
   // Another tap, even with another method, changes nothing.
   assert.equal((await pay('card')).status, 303);
@@ -167,13 +171,15 @@ test('an oversized form is refused and pays nothing', async () => {
 
 test('a traveller paying for himself is spoken to as "you"', async () => {
   booking({ payer: 'Wong Tak Ming' });
-  assert.match(await read(await open()), /Pay for your trip to Vancouver/);
+  const page = await read(await open());
+  assert.match(page, /<h1>Pay for your trip<\/h1>/);
+  assert.match(page, /Your flights are held for you\./);
   await pay('octopus');
-  const receipt = await read(await open());
-  assert.match(receipt, /Thank you\./);
-  assert.doesNotMatch(receipt, /Thank you, /);
-  assert.match(receipt, /Paid with Octopus for your trip to Vancouver/);
-  assert.match(receipt, /Your booking confirmation is on its way to you\./);
+  const done = await read(await open());
+  assert.match(done, /Thank you\./);
+  assert.doesNotMatch(done, /Thank you, /);
+  assert.match(done, /HKD 9,350 paid with Octopus/);
+  assert.match(done, /Your booking confirmation is on its way to you by email\./);
 });
 
 test('names reach the page as text, never as HTML', async () => {

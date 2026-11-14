@@ -1,8 +1,10 @@
 // The pay page behind the one pay link, /pay/<trip page code>. Mr Wong reaches it from the Pay button on his trip page,
-// or the family payer (Daniel) from the pay email. The payer picks how to pay and taps Pay; then the receipt.
+// or the family payer (Daniel) from the pay email. The payer chooses how to pay and taps Pay; the page says the
+// payment went through, then goes back to the trip page by itself.
 // A demo: no money moves and nothing is asked for, so the page has no card fields at all.
-// payment.js serves these pages and marks the booking paid; this file only draws them.
-import { esc, money, fmtDay, tripCity } from './trip.js';
+// The look is Cavell's (the trip page's CSS, from his design sheet for this page). payment.js serves these pages and
+// marks the booking paid; this file only draws them.
+import { esc, money, fmtDay, tripCity, homeCity } from './trip.js';
 
 /** What the payer can choose, in this order. `id` is what the form sends back; `label` is shown and logged. */
 export const METHODS = [
@@ -17,74 +19,113 @@ export const METHODS = [
 /** The label for a method id from the form, or null if it isn't one of METHODS. */
 export const methodLabel = (id) => METHODS.find((m) => m.id === id)?.label ?? null;
 
+/** Seconds "Payment successful" shows before the page goes back to the trip page. */
+export const BACK_AFTER_S = 3;
+
 const nameCase = (s) => String(s ?? '').trim().split(/\s+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 const firstName = (full) => String(full ?? '').trim().split(/\s+/)[0];
 const sameName = (a, b) => String(a ?? '').trim().toLowerCase().replace(/\s+/g, ' ') === String(b ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 /** True when the traveller pays for himself (Marvel's `self_pay` flag on the order, else the payer is the passenger). */
 const paysHimself = (order) => order.self_pay ?? sameName(order.payer, order.passenger);
 
-// Same colours, type and spacing as the trip page (src/screens/trip.js), so the two read as one site.
+// Cavell's trip page CSS (his design sheet "One look for the trip page and the payment page"): the parts this page
+// uses, with the same class names, plus the method cards from his payment page sketch, made dark-mode safe.
 const CSS = `
   :root {
-    --paper: #ffffff; --ground: #eef3f2; --ink: #172524; --muted: #46595a; --line: #c9d6d4;
-    --jade: #01484b; --jade-2: #00787a; --mint: #e4f2ef; --sun: #f5b83d; --sun-ink: #3d2a00; --ok: #1d7a46;
-    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang HK", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
+    --ink: #1f2a2a; --muted: #4f5c5c; --line: rgba(0, 93, 99, .14); --line-2: rgba(0, 93, 99, .28);
+    --jade: #005d63; --jade-deep: #00393d; --accent: #367878; --go: #2c4036; --go-hover: #002527; --go-ink: #ffffff;
+    --glass: rgba(255, 255, 255, .86); --glass-edge: rgba(255, 255, 255, .55); --soft: rgba(0, 93, 99, .07);
+    --on-jade: #ffffff; --on-jade-soft: #cfe6e4;
+    --sea: radial-gradient(120% 60% at 15% -10%, #2f8a8a 0%, transparent 60%),
+           radial-gradient(90% 50% at 110% 30%, rgba(124, 192, 187, .45) 0%, transparent 65%),
+           linear-gradient(180deg, #005d63 0%, #004a4f 55%, #00393d 100%);
+    --sans: system-ui, -apple-system, "SF Pro Text", "Segoe UI", Roboto, "PingFang HK", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --paper: #0f1d1d; --ground: #081414; --ink: #eef5f4; --muted: #a9bdbb; --line: #2b4443; --jade-2: #5cc3bd; --mint: #163332; --ok: #5fd08f; }
+    :root {
+      --ink: #eef3f2; --muted: #b9c6c5; --line: rgba(255, 255, 255, .12); --line-2: rgba(255, 255, 255, .24);
+      --accent: #8fd0cb; --go: #8fd0cb; --go-hover: #b5e2de; --go-ink: #062224;
+      --glass: rgba(10, 34, 36, .78); --glass-edge: rgba(255, 255, 255, .12); --soft: rgba(143, 208, 203, .10);
+      --sea: radial-gradient(120% 60% at 15% -10%, #0d5a5c 0%, transparent 60%), linear-gradient(180deg, #00393d 0%, #001c1e 100%);
+    }
   }
   * { box-sizing: border-box; }
-  html { -webkit-text-size-adjust: 100%; }
-  body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); font-size: 20px; line-height: 1.45; }
-  p, h1, h2, dl, dd { margin: 0; }
-  .page { max-width: 30rem; margin: 0 auto 40px; background: var(--paper); }
-  @media (min-width: 560px) { .page { margin-top: 16px; border-radius: 24px; border: 1px solid var(--line); overflow: hidden; } }
-  .top { background: var(--jade); color: #fff; padding: 18px 20px 22px; }
-  .brand { font-size: 17px; margin-bottom: 14px; color: #d9ecea; }
-  .brand b { color: #fff; }
-  .top h1 { font-size: 32px; line-height: 1.15; font-weight: 700; text-wrap: balance; }
-  .top .lede { margin-top: 8px; font-size: 20px; color: #d9ecea; }
-  .sec { padding: 22px 20px; }
-  .sec + .sec { border-top: 1px solid var(--line); }
-  h2 { font-size: 24px; line-height: 1.2; margin-bottom: 12px; }
-  .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; }
-  .facts dt { color: var(--muted); }
-  .facts dd { font-weight: 700; overflow-wrap: anywhere; }
-  .total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
-  .total b { font-size: 28px; font-variant-numeric: tabular-nums; }
-  fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
-  legend { padding: 0; }
+  html { -webkit-text-size-adjust: 100%; background: #00393d; }
+  body { margin: 0; min-height: 100vh; color: var(--ink); font-family: var(--sans); font-size: 20px; line-height: 1.45; }
+  body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--sea); }
+  p, h1, h2 { margin: 0; }
+  .page { max-width: 30rem; margin: 0 auto; padding: 0 14px 36px; display: grid; gap: 14px; }
+
+  /* The title sits straight on the jade, like an iPhone large title */
+  .top { color: var(--on-jade); padding: 26px 8px 10px; }
+  .brand { font-size: 16px; letter-spacing: .02em; margin-bottom: 18px; color: var(--on-jade-soft); }
+  .brand b { color: var(--on-jade); }
+  .top h1 { font-size: 34px; line-height: 1.12; font-weight: 700; letter-spacing: -.01em; text-wrap: balance; }
+  .top .lede { margin-top: 10px; font-size: 20px; color: var(--on-jade-soft); }
+
+  /* Frosted panes: glass at the edges, near-white behind every word */
+  .sec { background: var(--glass); -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+    border: 1px solid var(--glass-edge); border-radius: 22px; padding: 22px 20px;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, .7) inset, 0 18px 40px rgba(0, 30, 32, .28); }
+  h2 { font-size: 24px; line-height: 1.2; font-weight: 700; margin-bottom: 14px; }
+  .soft { color: var(--muted); }
+
+  /* Notice, and the one main button */
+  .status { background: var(--soft); border-left: 6px solid var(--accent); border-radius: 10px; padding: 14px 16px; }
+  .status b { display: block; font-size: 22px; line-height: 1.25; margin-bottom: 4px; }
+  .pay { display: block; width: 100%; margin-top: 18px; min-height: 64px; border: 0; background: var(--go); color: var(--go-ink); font: inherit;
+    font-size: 24px; font-weight: 700; line-height: 1.3; text-align: center; text-decoration: none; padding: 17px 20px; border-radius: 14px;
+    cursor: pointer; box-shadow: 0 1px 0 rgba(255, 255, 255, .18) inset, 0 8px 18px rgba(0, 37, 39, .25); }
+  .pay:hover { background: var(--go-hover); }
+  .pay:active { transform: scale(.98); }
+  .pay:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .paynote { margin-top: 10px; font-size: 17px; }
+
+  /* Ways to pay: one big card each. The radio button is hidden; the card itself shows the choice. */
+  fieldset { border: 0; margin: 18px 0 0; padding: 0; min-width: 0; }
+  legend { padding: 0; margin-bottom: 10px; font-size: 22px; font-weight: 700; }
+  .err { margin-bottom: 12px; }
   .methods { display: grid; gap: 10px; }
-  .method { display: grid; grid-template-columns: 30px 1fr; gap: 0 12px; align-items: center; padding: 14px 16px; border: 2px solid var(--line); border-radius: 16px; cursor: pointer; }
-  .method input { width: 26px; height: 26px; margin: 0; accent-color: var(--jade-2); }
-  .method .name { font-size: 22px; font-weight: 700; }
-  .method .note { grid-column: 2; font-size: 17px; color: var(--muted); }
-  .method:has(input:checked) { border-color: var(--jade-2); background: var(--mint); }
-  .method:has(input:focus-visible) { outline: 3px solid var(--sun); outline-offset: 2px; }
-  .err { margin-bottom: 12px; background: var(--sun); color: var(--sun-ink); font-weight: 700; padding: 10px 14px; border-radius: 10px; }
-  .btn { display: block; width: 100%; margin-top: 18px; padding: 18px 20px; border: 0; border-radius: 14px; background: var(--jade); color: #fff;
-    font: inherit; font-size: 24px; font-weight: 700; line-height: 1.3; text-align: center; text-decoration: none; cursor: pointer; }
-  .btn:disabled { opacity: .75; cursor: progress; }
-  @media (prefers-color-scheme: dark) { .btn { background: var(--jade-2); color: #081414; } }
-  .demo { margin-top: 12px; font-size: 17px; color: var(--muted); text-align: center; }
-  .status { display: flex; gap: 14px; align-items: flex-start; background: var(--mint); border-radius: 16px; padding: 16px; }
-  .dot { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 22px; background: var(--ok); color: #fff; }
-  .status b { display: block; font-size: 24px; line-height: 1.2; margin-bottom: 4px; }
-  .next { margin-top: 16px; }
-  .safe { padding: 18px 20px 24px; background: var(--ground); font-size: 17px; color: var(--muted); }
-  .safe b { color: var(--ink); }
+  .method { position: relative; display: flex; align-items: center; gap: 12px; min-height: 64px; padding: 10px 18px;
+    border: 2px solid var(--line-2); border-radius: 14px; background: rgba(255, 255, 255, .7); cursor: pointer; }
+  .method input { position: absolute; opacity: 0; width: 1px; height: 1px; margin: 0; }
+  .method .name { display: block; font-size: 22px; font-weight: 700; line-height: 1.25; }
+  .method .note { display: block; font-size: 17px; color: var(--muted); }
+  .method small { display: none; margin-left: auto; font-size: 16px; color: var(--muted); }
+  .method:has(input:checked), .method.on { border-color: var(--jade); box-shadow: inset 6px 0 0 var(--jade); background: #fff; }
+  .method:has(input:checked) small, .method.on small { display: inline; }
+  .method:has(input:focus-visible) { outline: 3px solid var(--accent); outline-offset: 3px; }
+  @media (prefers-color-scheme: dark) {
+    .method { background: rgba(255, 255, 255, .04); }
+    .method:has(input:checked), .method.on { border-color: var(--accent); background: rgba(143, 208, 203, .10); box-shadow: inset 6px 0 0 var(--accent); }
+  }
+
+  /* The safety note sits on the jade, below the panes */
+  .safe { padding: 6px 8px 0; font-size: 17px; color: var(--on-jade-soft); }
+  .safe b { color: var(--on-jade); }
   .safe p + p { margin-top: 8px; }
+
+  /* Solid panes when the phone asks for less transparency or more contrast, or cannot blur */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { :root { --glass: rgba(255, 255, 255, .97); } }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .sec { background: #fff; -webkit-backdrop-filter: none; backdrop-filter: none; }
+    .method { background: #fff; border-color: #5d7170; }
+  }
+  @media (prefers-color-scheme: dark) and ((prefers-reduced-transparency: reduce) or (prefers-contrast: more)) {
+    .sec, .method { background: #0f1d1d; }
+  }
 `;
 
-function shell(title, body, nonce) {
+/** The page around a body. `backTo`: an address this page goes to by itself after BACK_AFTER_S seconds. */
+function shell(title, body, nonce, backTo = null) {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<meta name="referrer" content="no-referrer">
+<meta name="referrer" content="no-referrer">${backTo ? `\n<meta http-equiv="refresh" content="${BACK_AFTER_S};url=${esc(backTo)}">` : ''}
 <title>${esc(title)}</title>
 <style nonce="${esc(nonce)}">${CSS}</style>
 </head>
@@ -102,81 +143,75 @@ const top = (h1, lede) => `<header class="top">
 </header>`;
 
 const footer = `<footer class="safe">
-  <p><b>Demo payment page: no money moves.</b> Cathay never asks for card numbers by text or phone.</p>
-  <p>Prototype: illustrative fares and sample flights.</p>
+  <p><b>Cathay never asks for passwords or card numbers here.</b></p>
+  <p>Prototype: a test payment, illustrative fares and sample flights.</p>
 </footer>`;
 
-function tripFacts(order) {
-  const fact = (k, v) => (v ? `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>` : '');
-  const leg = (seg) => (seg ? `${fmtDay(seg.dep, true)}, flight ${seg.flight}` : '');
-  return `<dl class="facts">
-    ${fact('Passenger', nameCase(order.passenger))}
-    ${fact('Going', leg(order.out))}
-    ${fact('Coming back', leg(order.back))}
-    ${fact('Booking', order.ref)}
-  </dl>`;
+/** What is being paid for, in one line, as on Cavell's sketch: "Hong Kong to Vancouver, Saturday 21 November. Back ... Booking K7Q2XM." */
+function tripLine(order) {
+  const from = homeCity(order);
+  const to = tripCity(order);
+  const route = from && to ? `${from} to ${to}` : to ? `Flights to ${to}` : 'Your flights';
+  const out = order.out?.dep ? `, ${fmtDay(order.out.dep)}` : '';
+  const back = order.back?.dep ? ` Back ${fmtDay(order.back.dep)}.` : '';
+  return `${route}${out}.${back} Booking ${order.ref}.`;
 }
 
 /**
- * The page for a held booking: the trip, the amount, the methods and one Pay button. The form posts back to the
- * same address. `error` is shown above the methods (e.g. when none was chosen). `nonce` must match the response's CSP.
+ * The page for a held booking: the amount, what it pays for, the ways to pay and one Pay button. The form posts back
+ * to the same address. `error` is shown above the ways to pay (e.g. when none was chosen). `nonce` must match the CSP.
  */
 export function renderPayPage({ order, code, nonce, error = '' }) {
-  const city = tripCity(order);
-  const whose = paysHimself(order) ? 'your' : `${nameCase(order.passenger)}'s`;
+  const self = paysHimself(order);
   const amount = money(order.fare_hkd);
+  const traveller = nameCase(order.passenger);
   const methods = METHODS.map((m) => `<label class="method">
-      <input type="radio" name="method" value="${esc(m.id)}" data-label="${esc(m.label)}" required>
-      <span class="name">${esc(m.label)}</span>${m.note ? `\n      <span class="note">${esc(m.note)}</span>` : ''}
-    </label>`).join('\n    ');
-  return shell(`Pay for booking ${order.ref}`, `${top(`Pay for ${whose} trip${city ? ` to ${city}` : ''}`, `Booking reference ${order.ref}`)}
-<div class="sec">
-  ${tripFacts(order)}
-  <p class="total"><span>To pay, return trip</span><b>${esc(amount)}</b></p>
-</div>
+        <input type="radio" name="method" value="${esc(m.id)}" required>
+        <span><span class="name">${esc(m.label)}</span>${m.note ? `<span class="note">${esc(m.note)}</span>` : ''}</span>
+        <small>Selected</small>
+      </label>`).join('\n      ');
+  const title = self ? 'Pay for your trip' : `Pay for ${traveller}'s trip`;
+  const lede = self ? 'Your flights are held for you.' : `${traveller} asked you to pay for these flights.`;
+  return shell(`Pay for booking ${order.ref}`, `${top(title, lede)}
 <form class="sec payform" method="post" action="/pay/${esc(encodeURIComponent(code))}">
+  <h2>${esc(amount)}</h2>
+  <p>${esc(tripLine(order))}</p>
   <fieldset>
-    <legend><h2>Choose how to pay</h2></legend>
-    ${error ? `<p class="err" role="alert">${esc(error)}</p>` : ''}
+    <legend>Choose how to pay</legend>
+    ${error ? `<p class="status err" role="alert"><b>${esc(error)}</b>Tap one of the ways to pay, then tap Pay.</p>` : ''}
     <div class="methods">
-    ${methods}
+      ${methods}
     </div>
   </fieldset>
-  <button class="btn" type="submit">Pay ${esc(amount)}</button>
-  <p class="demo">Demo: no card details needed, and no money moves.</p>
+  <button class="pay" type="submit">Pay ${esc(amount)}</button>
+  <p class="soft paynote">Test payment. No real money moves.</p>
 </form>
 ${footer}
 <script nonce="${esc(nonce)}">
-  // A short "paying" moment before the form is sent, and no second tap. Without JavaScript the form just posts.
-  document.querySelector('.payform').addEventListener('submit', (e) => {
-    const form = e.currentTarget;
-    const picked = form.querySelector('input[name="method"]:checked');
-    if (!picked) return;   // nothing chosen: the form posts and the server asks again
-    e.preventDefault();
-    if (form.dataset.sent) return;
+  // Shows the choice on phones without :has(), and says "Paying" after the tap. Without JavaScript the form still works.
+  const form = document.querySelector('.payform');
+  const cards = form.querySelectorAll('.method');
+  form.addEventListener('change', () => cards.forEach((card) => card.classList.toggle('on', card.querySelector('input').checked)));
+  form.addEventListener('submit', (e) => {
+    if (form.dataset.sent) return e.preventDefault();   // one payment per tap
     form.dataset.sent = '1';
-    const button = form.querySelector('button');
-    button.disabled = true;
-    button.textContent = 'Paying with ' + picked.dataset.label + '\\u2026';
-    setTimeout(() => form.submit(), 900);
+    form.querySelector('.pay').textContent = 'Paying\\u2026';
   });
 </script>`, nonce);
 }
 
-/** The receipt for a paid booking: who paid, how much, how, and the way back to the trip page. */
+/** After paying: "Payment successful", then back to the trip page by itself after BACK_AFTER_S seconds (or the button). */
 export function renderPaidPage({ order, code, nonce }) {
-  const city = tripCity(order);
   const self = paysHimself(order);
+  const trip = `/v/${encodeURIComponent(code)}`;
   const how = METHODS.some((m) => m.label === order.paid_with) ? ` with ${order.paid_with}` : '';
-  const traveller = nameCase(order.passenger);
-  return shell(`Paid: booking ${order.ref}`, `${top('Payment received', self ? 'Thank you.' : `Thank you, ${firstName(order.payer) || 'payer'}.`)}
+  const thanks = self || !firstName(order.payer) ? 'Thank you.' : `Thank you, ${firstName(order.payer)}.`;
+  const confirmation = self ? 'Your booking confirmation is on its way to you by email.' : `${nameCase(order.passenger)} gets the booking confirmation by email.`;
+  return shell(`Paid: booking ${order.ref}`, `${top('Payment successful', thanks)}
 <div class="sec">
-  <div class="status">
-    <span class="dot" aria-hidden="true">✓</span>
-    <p><b>${esc(money(order.fare_hkd))} paid</b>Paid${esc(how)} for ${self ? 'your' : `${esc(traveller)}'s`} trip${city ? ` to ${esc(city)}` : ''}. Booking reference ${esc(order.ref)}.</p>
-  </div>
-  <p class="next">${self ? 'Your booking confirmation is on its way to you.' : `${esc(traveller)} gets the booking confirmation.`}</p>
-  <a class="btn" href="/v/${esc(encodeURIComponent(code))}">See the booking</a>
+  <p class="status" role="status"><b>${esc(money(order.fare_hkd))} paid${esc(how)}</b>${esc(tripLine(order))} ${esc(confirmation)}</p>
+  <a class="pay" href="${esc(trip)}">Back to the trip</a>
+  <p class="soft paynote">Going back to the trip page in ${BACK_AFTER_S} seconds.</p>
 </div>
-${footer}`, nonce);
+${footer}`, nonce, trip);
 }
