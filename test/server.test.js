@@ -35,6 +35,7 @@ const deps = {
   renderTripPage: ({ page, order, profile }) => `TRIP ${profile.member_id} ${order?.status ?? 'options'} ${page.options.length}`,
   notFoundPage: () => '<h1>Not found</h1>',
   projectorHtml: '<html>projector</html>',
+  bridgeHtml: '<html>bridge</html>',
   handleMockCathay: (req, res) => { res.end('mock cathay'); return true; },
   messages,
   payment: { onPaid: (...a) => { paidCalls.push(a); return realPayment.onPaid(...a); } },
@@ -97,7 +98,7 @@ const holdOrder = (ref = 'K7Q2XM') => {
 test('/, unknown paths and refused admin routes give the same 404', async () => {
   const replies = await Promise.all([
     get('/'), get('/nope'), get('/v/'), get('/twilio/voice'), post('/twilio/nope'),
-    get('/projector'), get('/projector?key=wrong'), post('/reset'), post('/reset', { 'x-admin-key': 'wrong' }),
+    get('/projector'), get('/projector?key=wrong'), get('/bridge'), get('/bridge?key=wrong'), post('/reset'), post('/reset', { 'x-admin-key': 'wrong' }),
     post('/dev/simulate', { 'x-admin-key': 'wrong' }), get('/events?key=test-admin'),
   ]);
   for (const r of replies) {
@@ -223,6 +224,47 @@ test('call audio: token check, μ-law both ways in 20 ms frames, clear on interr
   await until(() => store.activeCall === null, 'the line to be free');
   assert.equal(session.closed, 1);
   assert.equal(call.session, null);
+});
+
+test('laptop bridge: PCM both ways, clear on interrupt, busy while a call is live, close frees the line', async () => {
+  const refused = await openSocket('/bridge/stream?key=wrong');
+  assert.notEqual(refused.readyState, WebSocket.OPEN);
+
+  const ws = new WebSocket(base.replace('http', 'ws') + '/bridge/stream?key=test-admin');
+  const binary = [];
+  const text = [];
+  ws.on('message', (data, isBinary) => (isBinary ? binary : text).push(isBinary ? data : JSON.parse(data)));
+  sockets.push(ws);
+  await once(ws, 'open');
+  await until(() => store.activeCall?.session, 'the model session');
+  const call = store.activeCall;
+  const session = sessions[0];
+  assert.equal(call.callerId, store.members.find((m) => m.member_id === 'DEMO-0001').phone);
+
+  // caller → model: one 20 ms frame, little-endian 16-bit
+  const tone = Int16Array.from({ length: 160 }, (_, i) => Math.round(8000 * Math.sin(i / 5)));
+  ws.send(Buffer.from(tone.buffer));
+  await until(() => session.audio.length === 1, 'caller audio');
+  assert.deepEqual(session.audio[0], tone);
+
+  // model → caller, then an interrupt
+  const reply = Int16Array.from({ length: 400 }, (_, i) => i * 50);
+  session.args.sendAudio(reply);
+  session.args.onInterrupt();
+  await until(() => binary.length === 1 && text.length === 1, 'audio and clear');
+  assert.deepEqual(new Int16Array(binary[0].buffer.slice(binary[0].byteOffset, binary[0].byteOffset + binary[0].length)), reply);
+  assert.deepEqual(text[0], { type: 'clear' });
+
+  // A second bridge while the call is live is told the line is busy.
+  const second = new WebSocket(base.replace('http', 'ws') + '/bridge/stream?key=test-admin');
+  sockets.push(second);
+  const [busy] = await once(second, 'message');
+  assert.deepEqual(JSON.parse(busy), { type: 'busy' });
+  assert.equal(store.activeCall, call);
+
+  ws.close();
+  await until(() => store.activeCall === null, 'the line to be free');
+  assert.equal(session.closed, 1);
 });
 
 test('GET /v/:code: page with privacy headers; unknown and expired codes are the same 404', async () => {

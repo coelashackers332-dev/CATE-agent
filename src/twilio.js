@@ -1,4 +1,5 @@
-// The phone line: Twilio's voice webhook, the call audio WebSocket (Media Streams) and the SMS webhook.
+// The phone line: Twilio's voice webhook, the call audio WebSocket (Media Streams) and the SMS webhook,
+// plus the laptop line (/bridge/stream) for a regular SIM answered in Phone Link.
 // Also owns the life of a call: create the call context, start the model session, end both.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import twilio from 'twilio';
@@ -163,6 +164,34 @@ export function createTwilio({ tools, startSession, payment }) {
     ws.on('close', () => { clearTimeout(deadline); endCall(call); });
   }
 
+  /**
+   * WS /bridge/stream: the laptop phone line (a regular SIM, answered in Phone Link, audio through virtual cables,
+   * page screens/bridge.html). Binary 8 kHz 16-bit PCM both ways; text {"type":"clear"|"busy"} from us.
+   */
+  function local(ws) {
+    if (store.activeCall) { ws.send('{"type":"busy"}'); return ws.close(); }
+    // ponytail: this line has no caller ID. The operator who clicks Start vouches for the caller, always the demo member.
+    const call = newCall(findMember('DEMO-0001').phone);
+    socket = ws;
+    const send = (data) => { if (ws.readyState === ws.OPEN) ws.send(data); };
+    ws.on('message', (data, isBinary) => {
+      if (!isBinary || data.length % 2) return;
+      const pcm = new Int16Array(data.length / 2);
+      for (let i = 0; i < pcm.length; i++) pcm[i] = data.readInt16LE(i * 2);
+      call.session?.audioIn(pcm);
+    });
+    ws.on('error', () => ws.terminate());
+    ws.on('close', () => endCall(call));
+    begin(
+      call,
+      (pcm) => send(Buffer.from(new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength))),   // copy: the model may reuse its buffer
+      () => send('{"type":"clear"}'),
+    ).catch((err) => {
+      console.error(`[call ${call.id}] model session failed to start: ${err.message}`);
+      endCall(call);
+    });
+  }
+
   /** POST /twilio/sms: "PAY" from a delegate's number pays that member's held booking. Anything else is ignored. */
   async function sms(req, res) {
     const params = await signedForm(req, res);
@@ -190,5 +219,5 @@ export function createTwilio({ tools, startSession, payment }) {
     return call;
   }
 
-  return { voice, stream, sms, simulate, endCall };
+  return { voice, stream, local, sms, simulate, endCall };
 }

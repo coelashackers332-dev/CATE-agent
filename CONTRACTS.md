@@ -145,6 +145,7 @@ export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref
 | `POST /twilio/sms` | Twilio | signature; `PAY` only from the delegate's number, only while held |
 | `GET /v/:code` | Mr Wong, Daniel | random code; read-only; headers `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
 | `GET /projector` + `WS /events` | team laptop | admin secret (`?key=`) |
+| `GET /bridge` + `WS /bridge/stream` | team laptop: a regular SIM answered in Phone Link, audio through virtual cables (`screens/bridge.html`) | this machine only + admin secret (`?key=`); one call at a time; no caller ID, so the call is always the demo member's number; binary 8 kHz PCM16 both ways, text `{"type":"clear"\|"busy"}` from the server |
 | `POST /reset`, `POST /dev/simulate` | team laptop | admin secret (`x-admin-key` header) |
 | `/mock-cathay/*` | our own `cathay.js` | local only |
 | everything else, including `/` | nobody | the same "Not found" |

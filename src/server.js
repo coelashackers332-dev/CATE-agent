@@ -25,7 +25,7 @@ const isAdmin = (key) => safeEqual(key, config.adminSecret);
  * @returns {import('node:http').Server}
  */
 export function createApp(deps) {
-  const { tools, startSession, renderTripPage, notFoundPage, projectorHtml, handleMockCathay, payment } = deps;
+  const { tools, startSession, renderTripPage, notFoundPage, projectorHtml, bridgeHtml, handleMockCathay, payment } = deps;
   const phoneLine = createTwilio({ tools, startSession, payment });
   const notFound = (res) => html(res, 404, notFoundPage());
 
@@ -56,6 +56,8 @@ export function createApp(deps) {
     if (is('POST', '/twilio/sms')) return phoneLine.sms(req, res);
     if (req.method === 'GET' && path.startsWith('/v/')) return tripPage(path.slice(3), res);
     if (is('GET', '/projector') && isAdmin(new URLSearchParams(query).get('key'))) return html(res, 200, projectorHtml);
+    // The laptop phone line has no caller ID, so it answers on this machine only, never through the tunnel.
+    if (is('GET', '/bridge') && isLocal(req) && isAdmin(new URLSearchParams(query).get('key'))) return html(res, 200, bridgeHtml);
     if (is('POST', '/reset') && isAdmin(req.headers['x-admin-key'])) {
       phoneLine.endCall();
       store.reset();
@@ -81,6 +83,9 @@ export function createApp(deps) {
   server.on('upgrade', (req, socket, head) => {
     const [path, query] = req.url.split('?');
     if (path === '/twilio/stream') return wss.handleUpgrade(req, socket, head, phoneLine.stream);
+    if (path === '/bridge/stream' && isLocal(req) && isAdmin(new URLSearchParams(query).get('key'))) {
+      return wss.handleUpgrade(req, socket, head, phoneLine.local);
+    }
     if (path === '/events' && isAdmin(new URLSearchParams(query).get('key'))) {
       return wss.handleUpgrade(req, socket, head, (ws) => {
         for (const ev of recent) ws.send(JSON.stringify(ev));
@@ -112,6 +117,7 @@ export async function wireApp() {
   const app = createApp({
     tools, startSession: model.startSession, renderTripPage: trip.renderTripPage, notFoundPage: trip.notFoundPage,
     projectorHtml: readFileSync(new URL('./screens/projector.html', import.meta.url), 'utf8'),
+    bridgeHtml: readFileSync(new URL('./screens/bridge.html', import.meta.url), 'utf8'),
     handleMockCathay, messages, payment,
   });
   return app;
