@@ -166,7 +166,7 @@ export async function wireApp() {
     import(`./model/${config.model}.js`),
   ]);
   const messages = createMessages({ mode: config.messages });
-  const payment = createPayment({ messages, texts, baseUrl: config.baseUrl });
+  const payment = createPayment({ messages, texts, emails, baseUrl: config.baseUrl });
   // One adapter per call, so projector lines carry the call id. The mock Cathay systems answer only on this
   // machine, so the adapter uses the local address, not the public one.
   const cathay = (callId) => createCathay({ base: `http://127.0.0.1:${app.address().port}`, callId });

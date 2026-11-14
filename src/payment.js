@@ -30,7 +30,12 @@ async function readForm(req) {
   return new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
 }
 
-export function createPayment({ messages, texts, baseUrl }) {
+/**
+ * @param {object} deps  { messages, texts, baseUrl, emails? }. With `emails` (src/screens/emails.js) and texts going
+ *                       by email (TEXTS=email, the default), the traveller gets the designed booked email instead of
+ *                       text 2 laid out as an email.
+ */
+export function createPayment({ messages, texts, baseUrl, emails = null }) {
   // The trip page for this booking. CONTRACTS.md does not say who sets page.ref after the hold, so if no
   // page carries the ref yet, the member's latest page without one (made by text_options) is linked here.
   function tripLink(order) {
@@ -64,10 +69,18 @@ export function createPayment({ messages, texts, baseUrl }) {
       console.error(`[payment] the call was not told that ${ref} is paid: ${err.message}`);
     }
 
-    // Text 2 goes to the traveller's number on file, with the same trip page link as text 1.
+    // Text 2 goes to the traveller's number on file, with the same trip page link as text 1. When texts go by email,
+    // the same message goes as the designed booked email, to the address on file for that number.
     const member = findMember(order.member_id);
     try {
-      if (member) await messages.sendSms(member.phone, texts.bookedSms(order, member, tripLink(order)));
+      const link = member ? tripLink(order) : '';
+      const byEmail = (process.env.TEXTS || 'email').trim().toLowerCase() === 'email';
+      if (member && emails?.bookedEmail && byEmail && member.email) {
+        const mail = emails.bookedEmail({ order, profile: member, link });
+        await messages.sendEmail(member.email, mail.subject, mail.html, mail.text);
+      } else if (member) {
+        await messages.sendSms(member.phone, texts.bookedSms(order, member, link));
+      }
     } catch (err) {
       console.error(`[payment] text 2 for ${ref} not sent: ${err.message}`);   // the booking is still paid
     }

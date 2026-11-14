@@ -6,7 +6,7 @@ CATE is a voice assistant for travellers who find online booking hard: older tra
 
 Built for **Cathay Hackathon 2026**, challenge *Premium Travel: Making Travel More Accessible*, by team **E332 Coelas Hackers**.
 
-> **Status: work in progress.** The booking logic, server, screens and payment loop run end to end with a scripted stand-in for the voice model. The live voice model, real schedules and live messages are next. The [Status](#status) table below shows what exists.
+> **Status: working prototype.** A real phone call to the standby phone is answered automatically, Amazon Nova 2 Sonic talks with the caller, and the booking, texts (sent as email), pay page and booked confirmation run end to end on Cathay's real schedule (OAG). The [Status](#status) table below shows what exists.
 
 ## How a call works
 
@@ -51,22 +51,23 @@ Caller's phone ──► standby phone (the number Mr Wong calls)
                     └─ two-way audio stream ──► Amazon Bedrock: Nova 2 Sonic (speech to speech)
 ```
 
-**Mocked for the demo.** We have no access to Cathay's systems, so the server includes mock Membership, Orders and Schedule systems behind one adapter (`src/cathay.js`). Their operations are modelled on public IATA NDC message names (`OrderCreate`, `AirShopping`). In production, that adapter points at Cathay's membership and booking systems and nothing else changes. Fares are illustrative. Flight schedules are placeholders until they are replaced by an OAG schedule snapshot. Payment is in test mode; no money moves.
+**Mocked for the demo.** We have no access to Cathay's systems, so the server includes mock Membership, Orders and Schedule systems behind one adapter (`src/cathay.js`). Their operations are modelled on public IATA NDC message names (`OrderCreate`, `AirShopping`). In production, that adapter points at Cathay's membership and booking systems and nothing else changes. Flight schedules are a real Cathay schedule snapshot (OAG, November–December 2026); the demo flights in February–March 2027 are placeholders. Fares are illustrative. Payment is a demo pay page; no money moves.
 
 ## Status
 
 | Part | State |
 |---|---|
 | Module contracts (`CONTRACTS.md`), configuration, event log, in-memory store, seed data | ✅ Done |
-| Mock Cathay systems + adapter, the 7 booking tools and their rules | ✅ Done, tested |
-| Server: local phone line for the Bluetooth bridge, view-only pages, reset | ✅ Done, tested with a simulated bridge; not yet run with the real phone |
-| Screens: projector view, trip page with needs card, texts, pay email | ✅ Done, tested |
-| Payment: the family member pays (on stage the operator triggers it with `POST /dev/pay`) | ✅ Done, tested |
+| Mock Cathay systems + adapter, the booking tools and their rules | ✅ Done, tested |
+| Server: local phone line for the Bluetooth bridge, view-only pages, reset | ✅ Done, tested with real phone calls |
+| Screens: projector view, trip page with needs card (choose a flight and who pays by button during the call), texts, pay email, booked email | ✅ Done, tested |
+| Payment: demo pay page `/pay/<code>` (`PAYMENT=page`), from the pay email (family member) or the trip page (traveller); `POST /dev/pay` as a stage fallback | ✅ Done, tested |
 | Scripted stand-in for the voice model (plays the golden path, no audio) | ✅ Done |
 | General Cathay questions (`ask_cathay`): search over passages in `knowledge/`, source shown on the projector | ✅ Tool and keyword search done, tested. The 23 passages are drafts, not yet verified against Cathay's pages. Search by meaning (embeddings) is planned. |
-| Voice model: Amazon Nova 2 Sonic over the call audio (`MODEL=nova`) | In progress: driver written and unit-tested, not yet run against Bedrock |
+| Voice model: Amazon Nova 2 Sonic over the call audio (`MODEL=nova`) | ✅ Done, run on real calls through Bedrock (Tokyo) |
 | Live email, texts sent as email (`TEXTS=email`) | ✅ Done, tested |
-| Real schedules (OAG snapshot), Stripe test checkout | Planned |
+| Real schedules (OAG snapshot): every Cathay route from Hong Kong, November–December 2026 | ✅ Done |
+| Real card checkout (Stripe or Cathay's payment gateway) | Planned for production |
 
 ## Repo layout
 
@@ -105,7 +106,7 @@ To play the whole booking without a phone (`MODEL=scripted`), open the projector
 
 ```sh
 curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/simulate          # the call
-curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/pay               # Daniel pays
+curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/pay               # Daniel pays (or open the pay link from his email)
 curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/reset                 # start again
 ```
 

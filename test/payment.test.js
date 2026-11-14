@@ -184,3 +184,31 @@ test('a name reaches the page as text, never as HTML', async () => {
   assert.ok(!page.includes('<b>Mallory'), 'no raw HTML from a name');
   assert.ok(page.includes('Thank you, &lt;b&gt;Mallory&lt;/b&gt;.'), 'shown escaped instead');
 });
+
+test('with the email designs and texts by email, text 2 is the booked email to the traveller\'s address on file', async () => {
+  const sent = [];
+  const withEmails = createPayment({
+    messages: { sendSms: async (to, body) => { sent.push({ sms: to, body }); }, sendEmail: async (to, subject, html, text) => { sent.push({ to, subject, html, text }); } },
+    texts: { bookedSms: (order) => `BOOKED ${order.ref}` },
+    emails: { bookedEmail: ({ order, profile, link }) => ({ subject: `Booked ${order.ref}`, html: `<p>${profile.member_id}</p>`, text: link }) },
+    baseUrl: config.baseUrl,
+  });
+  const texts = process.env.TEXTS;
+  try {
+    delete process.env.TEXTS;   // the default is email
+    booking();
+    assert.equal(await withEmails.onPaid('K7Q2XM', 'demo'), true);
+    const wong = store.members.find((m) => m.member_id === 'DEMO-0001');
+    assert.deepEqual(sent, [{ to: wong.email, subject: 'Booked K7Q2XM', html: '<p>DEMO-0001</p>', text: `${config.baseUrl}/v/${CODE}` }]);
+
+    // TEXTS=sms: still a text
+    store.reset({ log: false });
+    sent.length = 0;
+    process.env.TEXTS = 'sms';
+    booking();
+    await withEmails.onPaid('K7Q2XM', 'demo');
+    assert.deepEqual(sent, [{ sms: wong.phone, body: 'BOOKED K7Q2XM' }]);
+  } finally {
+    if (texts === undefined) delete process.env.TEXTS; else process.env.TEXTS = texts;
+  }
+});
