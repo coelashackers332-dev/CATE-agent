@@ -132,8 +132,13 @@ export function payEmail({ order, travellerName, payerName, payUrl }) → { subj
 // src/screens/trip.js
 export function renderTripPage({ page, order, profile, now }) → string   // full HTML; states: options | confirmed (+ needs card) | ended
 export function notFoundPage() → string
+// src/screens/pay.js  (the pay page; Harell's screen, design with Cavell)
+export const METHODS → [{ id, label, note? }]        // card, Apple Pay, Google Pay, FPS, PayMe, AlipayHK, Octopus
+export function renderPayPage({ order, code, nonce, error }) → string   // held: trip, amount, methods, one Pay button
+export function renderPaidPage({ order, code, nonce }) → string         // paid: receipt + link to /v/:code
 // src/payment.js  (server side)
-export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref,'paid'), text 2, notify the live session
+export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref,'paid'), order.paid_with = source, notify the live session, then text 2
+payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
 ```
 
 ## 7. HTTP routes (`src/server.js`)
@@ -144,6 +149,7 @@ export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref
 | `WS /twilio/stream` | Twilio | one-time token passed as `<Parameter>`, checked in `start` |
 | `POST /twilio/sms` | Twilio | signature; `PAY` only from the delegate's number, only while held |
 | `GET /v/:code` | Mr Wong, Daniel | random code; read-only; headers `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
+| `GET /pay/:code`, `POST /pay/:code` | the payer: Mr Wong (Pay button on his trip page) or Daniel (pay email) | the trip page's random code; only while the booking is held (after payment, GET shows the receipt); POST takes one field `method` from `METHODS`, body ≤ 2 KB, then 303 back to GET; no card or personal fields; headers as `/v/` plus a nonce CSP and `X-Frame-Options: DENY` |
 | `GET /projector` + `WS /events` | team laptop | admin secret (`?key=`) |
 | `POST /reset`, `POST /dev/simulate` | team laptop | admin secret (`x-admin-key` header) |
 | `/mock-cathay/*` | our own `cathay.js` | local only |
@@ -158,6 +164,7 @@ export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref
 - The server emits `system` events from "Phone" (`call started`, `call ended`); the projector's call status uses them.
 - Wrong admin key, unknown or expired page codes and unknown paths all return the same not-found page (404). A bad Twilio signature returns 403.
 - `PAYMENT=sms`: `payEmail` gets `payUrl: null` and tells the payer to reply PAY.
+- 2026-11-14: no Twilio for the demo (calls reach a team phone bridged to a laptop), so PAY by text can't arrive. Payment is the demo pay page at `/pay/<trip page code>` (no money moves). `PAYMENT=page`: `send_pay_link` passes `payUrl: \`${baseUrl}/pay/${call.pageCode}\`` to `payEmail` and sends no "Reply PAY" text; when the traveller pays himself, the trip page shows a Pay button to the same link while the booking is held. A call started without Twilio must use the demo caller's number as `callerId` (as `/dev/simulate` does), because text 1 goes to that number's address on file.
 - Eighth tool `ask_cathay({ question })` for general Cathay questions (RAG, `onday/RAG-PLAN.md` in the planning folder). It reads `deps.knowledge.search(question, limit) → Promise<[{ title, text, source, checked }]>`, which returns `[]` when nothing is relevant enough. The search is `src/knowledge.js`: `loadPassages()` reads `knowledge/*.md` (format in the file header; a passage without `Source` and `Checked` is skipped) and `createKnowledge({ passages, mode })` gives `{ search }`. `KNOWLEDGE=keyword` matches words and needs half the question's weighted words in a passage; `KNOWLEDGE=embeddings` is not built. `knowledge/` holds 23 draft passages (`Checked: 2026-11-14 draft`, not yet verified against Cathay's pages). `ask_cathay` also emits a `screen` event with `what: "knowledge"` naming the source. Details: `docs/TOOLS.md` §8.
 - `server.js` exports `wireApp()` (real modules) besides `createApp(deps)` (injected, for tests).
 

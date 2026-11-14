@@ -55,6 +55,7 @@ export function createApp(deps) {
     if (is('POST', '/twilio/voice')) return phoneLine.voice(req, res);
     if (is('POST', '/twilio/sms')) return phoneLine.sms(req, res);
     if (req.method === 'GET' && path.startsWith('/v/')) return tripPage(path.slice(3), res);
+    if (path.startsWith('/pay/')) return payment.payRoute(req, res, path.slice(5), () => notFound(res));
     if (is('GET', '/projector') && isAdmin(new URLSearchParams(query).get('key'))) return html(res, 200, projectorHtml);
     if (is('POST', '/reset') && isAdmin(req.headers['x-admin-key'])) {
       phoneLine.endCall();
