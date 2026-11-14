@@ -110,7 +110,7 @@ test('golden path: verify → profile → flights → text → assistance → ho
   const chosen = await run('choose_option', { option_id: '1' });
   assert.equal(chosen.confirm, 'The first option: Friday 19 February at 11:40 am, direct, 8,420 Hong Kong dollars return.');
   assert.match(chosen.next, /Your membership has a window seat and a vegetarian meal\. Is that still right\?/);
-  const kept = await run('set_preferences', { keep: true });
+  const kept = await run('set_preferences', { seat_ok: true, meal_ok: true });
   assert.equal(kept.confirm, 'A window seat and a vegetarian meal, as on your membership.');
   assert.match(kept.next, /On your Osaka trip we arranged this: Wheelchair from check-in to the gate\. .* Would you like the same help again\?/);
   // assistance: "like Osaka?" → the SSR of the latest flown order
@@ -121,7 +121,7 @@ test('golden path: verify → profile → flights → text → assistance → ho
   assert.match((await run('hold_booking', {})).error, /^Not yet\. .*pay yourself/, 'no read-back until he has said who pays');
   const payer = await run('set_payer', { payer: 'family' });
   assert.equal(payer.confirm, 'Daniel will be asked to pay.');
-  assert.match(payer.next, /Call hold_booking now for the read-back\./);
+  assert.match(payer.next, /call hold_booking now, in this same turn/);
 
   // 6. hold: read-back first, then the hold
   const first = await run('hold_booking', { option_id: '1' });
@@ -245,7 +245,7 @@ test('hold_booking without a read-back confirmation creates nothing', async () =
   await verify();
   await run('find_flights', VANCOUVER);
   assert.match((await run('hold_booking', { option_id: '1', caller_confirmed: true })).error, /Is that still right/, 'seat and meal are asked first');
-  await run('set_preferences', { keep: true });
+  await run('set_preferences', { seat_ok: true, meal_ok: true });
   await run('set_payer', { payer: 'family' });
   assert.match((await run('hold_booking', { option_id: '1', caller_confirmed: true })).error, /wheelchair/i, 'then wheelchair help');
   await run('set_assistance', { walk_in_cabin: true, stairs: true, long_distance: true });
@@ -355,8 +355,8 @@ test('the caller can choose to pay himself: said back at once, in the read-back,
   await run('find_flights', VANCOUVER);
   await run('choose_option', { option_id: '1' });
   // a wish for another seat or meal is recorded and answered honestly, never invented
-  const change = await run('set_preferences', { keep: false });
-  assert.equal(change.confirm, 'On this call I can only book a window seat and a vegetarian meal, as on your membership. A member of staff can change that after booking.');
+  const change = await run('set_preferences', { seat_ok: true, meal_ok: false });
+  assert.equal(change.confirm, 'I will keep the window seat. On this call I can only book the vegetarian meal on your membership. A member of staff can change the meal after booking.');
   await run('set_assistance', { same_as_last_trip: true });
   assert.equal((await run('set_payer', { payer: 'my daughter' })).ok, false);
   const self = await run('set_payer', { payer: 'self' });

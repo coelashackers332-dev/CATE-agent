@@ -116,8 +116,11 @@ const specs = [
       + 'The result gives you a sentence to say back to him and the next question to ask.',
     inputSchema: {
       type: 'object',
-      properties: { keep: { type: 'boolean', description: 'True if the seat and meal on his membership are still right; false if he wants something else' } },
-      required: ['keep'],
+      properties: {
+        seat_ok: { type: 'boolean', description: 'True if the seat on his membership is still right; false if he wants a different seat' },
+        meal_ok: { type: 'boolean', description: 'True if the meal on his membership is still right; false if he wants a different meal' },
+      },
+      required: ['seat_ok', 'meal_ok'],
     },
   },
   {
@@ -243,7 +246,7 @@ export function createTools(deps) {
   /** An answer was recorded: the model says `confirm` back at once, then asks the one next thing. Any earlier read-back is out of date. */
   async function recorded(call, cathay, confirm, extra = {}) {
     call.pendingHold = null;
-    const then = (await nextStep(call, cathay)) ?? 'Call hold_booking now for the read-back.';
+    const then = (await nextStep(call, cathay)) ?? 'call hold_booking now, in this same turn, without asking him anything first, and say the readback it returns.';
     return { ok: true, ...extra, confirm, next: `Say: "${confirm}" Then: ${then} Never record an answer he has not given.` };
   }
 
@@ -369,13 +372,18 @@ export function createTools(deps) {
 
     // Rule: seat and meal come from the profile. The caller hears them and can object; a change is for staff, never invented here.
     async set_preferences(args, call, cathay) {
-      const keep = yesNo(args.keep);
-      if (keep === null) return fail('Ask him first if the seat and meal on his membership are still right.');
-      const wishes = wishesOf(await profileOf(call, cathay));
-      call.prefs = keep ? 'kept' : 'change wanted';
-      return recorded(call, cathay, keep
-        ? `${wishes[0].toUpperCase()}${wishes.slice(1)}, as on your membership.`
-        : `On this call I can only book ${wishes}, as on your membership. A member of staff can change that after booking.`);
+      // Seat and meal are separate answers: with one yes/no the model turned "another meal, same seat" into a plain yes.
+      const [seatOk, mealOk] = [yesNo(args.seat_ok), yesNo(args.meal_ok)];
+      if (seatOk === null || mealOk === null) return fail('Ask him first if the seat and meal on his membership are still right.');
+      const { prefs } = await profileOf(call, cathay);
+      const items = [[prefs?.seat && `${prefs.seat} seat`, seatOk, 'seat'], [prefs?.meal && `${prefs.meal} meal`, mealOk, 'meal']].filter(([item]) => item);
+      const kept = items.filter(([, ok]) => ok).map(([item]) => item);
+      const wanted = items.filter(([, ok]) => !ok);
+      call.prefs = wanted.length ? 'change wanted' : 'kept';
+      return recorded(call, cathay, wanted.length
+        ? `${kept.length ? `I will keep the ${kept.join(' and the ')}. ` : ''}On this call I can only book the ${wanted.map(([item]) => item).join(' and the ')} on your membership. `
+          + `A member of staff can change the ${wanted.map(([, , what]) => what).join(' and the ')} after booking.`
+        : `A ${kept.join(' and a ')}, as on your membership.`);
     },
 
     // Rule: the pay request goes to the caller's own number on file or to the delegate on file, as the caller chose.

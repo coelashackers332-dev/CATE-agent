@@ -40,7 +40,7 @@ export function startSession({ call, runTool, emit }) {
       () => hear('Yes, please.'),
       async () => { await tool('text_options'); say("I'm texting you now. Which one would you like?"); },
       () => hear('The first one.'),
-      async () => { say((await tool('choose_option', { option_id: call.scriptChoice })).confirm); await tool('set_preferences', { keep: true }); },
+      async () => { say((await tool('choose_option', { option_id: call.scriptChoice })).confirm); await tool('set_preferences', { seat_ok: true, meal_ok: true }); },
       () => say('Wheelchair to the gate, like your Osaka trip?'),
       () => hear('Yes, please.'),
       async () => { const a = await tool('set_assistance', { same_as_last_trip: true }); say(a.summary); },
