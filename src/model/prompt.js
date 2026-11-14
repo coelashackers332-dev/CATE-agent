@@ -9,7 +9,13 @@ export const CALL_CONNECTED = 'Call connected.';
 
 // Festival dates the caller may use instead of a date. The model must not work these out itself.
 // shortcut: fixed list for the demo year, add rows if the demo moves past 2027.
+// The flight data (OAG) runs to 31 Dec 2026, so the demo trip is "after Christmas, back before New Year".
 const HOLIDAYS = [
+  ['Christmas Eve 2026', '2026-12-24'],
+  ['Christmas 2026', '2026-12-25'],
+  ['Boxing Day 2026', '2026-12-26'],
+  ["New Year's Eve 2026", '2026-12-31'],
+  ["New Year's Day 2027", '2027-01-01'],
   ['Chinese New Year 2027', '2027-02-06'],
   ['Easter Sunday 2027', '2027-03-28'],
   ['Ching Ming Festival 2027', '2027-04-05'],

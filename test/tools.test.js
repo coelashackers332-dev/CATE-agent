@@ -398,6 +398,15 @@ test('cities: every airport in the schedule is known by its city name, and commo
   assert.match((await run('find_flights', { to: 'Atlantis', after: '2026-11-20', before: '2026-12-10' })).error, /We have no flights for/);
 });
 
+test('demo trip: after Christmas 2026, back before New Year, finds options (the OAG schedule ends 31 Dec 2026)', async () => {
+  await verify();
+  for (const to of ['Osaka', 'Tokyo', 'Vancouver', 'London', 'Singapore', 'Taipei', 'Bangkok', 'Sydney']) {
+    const found = await run('find_flights', { to, after: '2026-12-25', before: '2027-01-01' });
+    if (process.env.SHOW_DEMO) console.log(to, found.ok ? found.read_out.join(' ') + ' ' + found.return_flight : found.error);
+    if (['Osaka', 'Tokyo', 'Vancouver'].includes(to)) assert.equal(found.ok, true, to);
+  }
+});
+
 test('PAYMENT=page: the options go to his trip page at once, the hold opens the payment page, and no pay request is sent', async () => {
   config.payment = 'page';
   await verify();
