@@ -116,8 +116,9 @@ const specs = [
   },
   {
     name: 'text_options',
-    description: 'Call only after he says yes to "Shall I text these to you?". Sends the options from find_flights to the phone number on his membership. '
-      + 'It takes no input: you cannot send to any other number. Then tell him the text is on its way.',
+    description: 'Sends the options from find_flights and the link to his trip page to the contact on his membership (text or email). '
+      + 'Call after he says yes to "Shall I text these to you?", or when he asks for them to be sent (again). '
+      + 'It takes no input: you cannot send to any other number or address. Then say what the result tells you.',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -172,7 +173,7 @@ const specs = [
   },
   {
     name: 'send_pay_link',
-    description: 'Call right after the booking is held. The member pays himself: the payment page opens on his phone (or the pay request goes to '
+    description: 'Call right after the booking is held, unless the hold_booking result says the payment page is already open. The member pays himself: the payment page opens on his phone (or the pay request goes to '
       + 'his own phone), never to anyone else. It takes no input. Say what the result tells you. You will be told when the payment arrives.',
     inputSchema: { type: 'object', properties: {} },
   },
@@ -212,6 +213,20 @@ export function createTools(deps) {
     const expires = new Date(Date.parse(lastArrival) + 864e5).toISOString().slice(0, 10);   // the day after the trip
     store.pages.set(call.pageCode, { member_id: call.memberId, options: call.options, ref: call.ref ?? null, expires });
     return `${baseUrl}/v/${call.pageCode}`;
+  }
+
+  /** PAYMENT=page: his open trip page goes to the pay page by itself while the booking is held (server.js), so nothing is sent. */
+  function openPayPage(call) {
+    emit(call.id, 'screen', { what: 'pay_page', summary: 'payment page opens on his phone' });
+    call.payRequested = 'his trip page';
+  }
+
+  /** Sends this call's options and trip page link to the member's own number on file (by email when TEXTS=email). */
+  async function sendOptions(call) {
+    const link = tripPage(call);
+    await deps.messages.sendSms(call.callerId, deps.texts.optionsSms(call.options, link));
+    emit(call.id, 'screen', { what: 'sms', summary: `text 1 to the caller: ${call.options.length} options + trip link` });
+    emit(call.id, 'screen', { what: 'options_page', summary: 'trip page created', url: link });
   }
 
   function readback(option, profile, assistance) {
@@ -328,6 +343,17 @@ export function createTools(deps) {
       call.pendingHold = null;
 
       const tooEarly = priced.length - fits.length;
+      // PAYMENT=page: the options go to his trip page at once (the member taps one there), without a "shall I send it?"
+      // question: in a real call he asked for the email twice and the model, never asked to send, told him it could not.
+      // The first search sends the email; a new search only refreshes the same page.
+      let sentNote = '';
+      if (config.payment === 'page') {
+        try {
+          if (call.optionsSent) tripPage(call);
+          else { await sendOptions(call); call.optionsSent = true; }
+          sentNote = 'Then tell him these options are also on his trip page, in the email we just sent: he can tap the one he wants there, or tell you. ';
+        } catch { /* the email failed: the spoken options are enough, and he can ask for it again (text_options) */ }
+      }
       return {
         ok: true,
         options,
@@ -337,7 +363,8 @@ export function createTools(deps) {
         return_flight: `Every option comes back on ${fmtDay(back.dep)}, leaving at ${spokenTime(back.dep)}.`,
         ...(tooEarly > 0 && { left_out: `I left out ${tooEarly} flight${tooEarly === 1 ? ' that leaves' : 's that leave'} before ${spokenTime(`T${earliest}`.padStart(16))}, because you prefer not to leave that early.` }),
         // The model follows a hint in the result more reliably than the prompt, so the order of the next questions lives here.
-        next: `${tooEarly > 0 ? 'After the return flight, say left_out. ' : ''}Then ask "Shall I text these to you?" and after that which option he would like. `
+        next: `${tooEarly > 0 ? 'After the return flight, say left_out. ' : ''}`
+          + (sentNote ? `${sentNote}Then ask which option he would like. ` : 'Then ask "Shall I text these to you?" and after that which option he would like. ')
           + 'As soon as he chooses, call choose_option.',
       };
     },
@@ -346,11 +373,15 @@ export function createTools(deps) {
     // the membership lookup matched it, and it never comes from speech or from the model.
     async text_options(_args, call) {
       if (!call.options?.length) return fail('There are no options to send yet. Find flights first.');
-      const link = tripPage(call);
-      await deps.messages.sendSms(call.callerId, deps.texts.optionsSms(call.options, link));
-      emit(call.id, 'screen', { what: 'sms', summary: `text 1 to the caller: ${call.options.length} options + trip link` });
-      emit(call.id, 'screen', { what: 'options_page', summary: 'trip page created', url: link });
-      return { ok: true, sent: true, say: 'Tell him the text is on its way to the phone he is calling from, and that the link only shows his trip. Then ask which option he would like.' };
+      await sendOptions(call);
+      call.optionsSent = true;
+      const byEmail = (process.env.TEXTS || 'email').trim().toLowerCase() === 'email';
+      return {
+        ok: true, sent: true,
+        say: byEmail
+          ? 'Tell him the email with his trip page is on its way to the email address on his membership, and that he can tap the option he wants there. Then ask which option he would like, unless he already chose.'
+          : 'Tell him the text is on its way to the phone he is calling from, and that the link only shows his trip. Then ask which option he would like.',
+      };
     },
 
     // Rule: the code comes from the fixed table or from the last flown trip on file, never from the model.
@@ -426,11 +457,19 @@ export function createTools(deps) {
       emit(call.id, 'state', { ref: order.ref, status: 'held' });   // the projector's booking status
       call.pendingHold = null;
       tripPage(call);   // the trip page now belongs to this booking (and exists even if no text was sent)
+      if (config.payment === 'page') {
+        // His trip page turns into the pay page by itself now (server.js), so the hold opens it: no second tool call.
+        // In a real call the model said "I'll send the payment request now" and then waited 40 s without calling send_pay_link.
+        openPayPage(call);
+        return {
+          ok: true, ref: order.ref, ref_spoken: [...order.ref].join(' '), status: 'held', sent_to: call.payRequested,
+          say: 'Tell him the booking is held and read the reference letter by letter. Then tell him the payment page is now open on his phone, '
+            + 'on the page from our email, and he can choose how to pay there. An email with his booking comes as soon as it is paid. Stay on the line.',
+        };
+      }
       return {
         ok: true, ref: order.ref, ref_spoken: [...order.ref].join(' '), status: 'held',
-        say: config.payment === 'page'
-          ? 'Tell him the booking is held and read the reference letter by letter. Then call send_pay_link.'
-          : 'Tell him the booking is held and read the reference letter by letter. Then ask if you may send the pay request now, and call send_pay_link only after he says yes.',
+        say: 'Tell him the booking is held and read the reference letter by letter. Then ask if you may send the pay request now, and call send_pay_link only after he says yes.',
       };
     },
 
@@ -439,9 +478,7 @@ export function createTools(deps) {
       if (!call.ref) return fail('There is no held booking yet. Hold the booking first.');
       if (call.payRequested) return { ok: true, sent_to: call.payRequested, already_sent: true };
       if (config.payment === 'page') {
-        // His open trip page goes to the pay page by itself while the booking is held (server.js), so nothing is sent.
-        emit(call.id, 'screen', { what: 'pay_page', summary: 'payment page opens on his phone' });
-        call.payRequested = 'his trip page';
+        openPayPage(call);
         return {
           ok: true, sent_to: call.payRequested,
           say: 'Tell him the payment page is now open on his phone, on the page from our email, and he can choose how to pay there. An email with his booking comes as soon as it is paid. Stay on the line.',

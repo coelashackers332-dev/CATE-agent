@@ -398,20 +398,29 @@ test('cities: every airport in the schedule is known by its city name, and commo
   assert.match((await run('find_flights', { to: 'Atlantis', after: '2026-11-20', before: '2026-12-10' })).error, /We have no flights for/);
 });
 
-test('PAYMENT=page: the read-back says the payment page opens, the hold goes straight on to it, and nothing is sent', async () => {
+test('PAYMENT=page: the options go to his trip page at once, the hold opens the payment page, and no pay request is sent', async () => {
   config.payment = 'page';
   await verify();
+  const found = await run('find_flights', VANCOUVER);
+  assert.equal(sent.sms.length, 1, 'the options and trip link are sent without asking');
+  assert.match(sent.sms[0].body, /^OPTIONS 1/);
+  assert.match(found.next, /on his trip page, in the email we just sent/);
+  assert.doesNotMatch(found.next, /Shall I text these/);
   await run('find_flights', VANCOUVER);
+  assert.equal(sent.sms.length, 1, 'a new search refreshes the same page, it does not send again');
+  assert.equal((await run('text_options', {})).ok, true, 'he can still ask for it again');
+  assert.equal(sent.sms.length, 2);
   await run('choose_option', { option_id: '1' });
   await run('set_preferences', { seat_ok: true, meal_ok: true });
   await run('set_assistance', { same_as_last_trip: true });
   assert.match((await run('hold_booking', {})).readback, /Once it is held, the payment page opens on your phone\. Shall I hold this booking\?$/);
   const held = await run('hold_booking', { caller_confirmed: true });
-  assert.match(held.say, /Then call send_pay_link\.$/, 'no "may I send it?" question');
-  const smsBefore = sent.sms.length;
+  assert.equal(held.sent_to, 'his trip page', 'the hold itself opens the payment page');
+  assert.match(held.say, /payment page is now open on his phone/);
+  assert.doesNotMatch(held.say, /send_pay_link/);
+  assert.equal(call.payRequested, 'his trip page');
   const pay = await run('send_pay_link', {});
-  assert.equal(pay.sent_to, 'his trip page');
-  assert.match(pay.say, /payment page is now open on his phone/);
+  assert.equal(pay.already_sent, true);
   assert.equal(sent.email.length, 0);
-  assert.equal(sent.sms.length, smsBefore, 'no "Reply PAY" text');
+  assert.equal(sent.sms.length, 2, 'no "Reply PAY" text');
 });
