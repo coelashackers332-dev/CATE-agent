@@ -112,8 +112,8 @@ export function startSession({ call, specs, runTool, sendAudio, onInterrupt, emi
   notify(text),     // out-of-band info for the model, e.g. "Daniel has paid for K7Q2XM"
   close(),
 }
-// sendAudio(pcm16)  : model → caller audio (8 kHz Int16Array); the server converts to μ-law for Twilio
-// onInterrupt()     : caller talked over CATE; the server sends Twilio `clear`
+// sendAudio(pcm16)  : model → caller audio (8 kHz Int16Array); the server sends it to the bridge as is
+// onInterrupt()     : caller talked over CATE; the server sends the bridge {"event":"clear"}
 ```
 
 `MODEL=scripted` (built tonight) ignores audio and plays the golden path by calling `runTool` in order and emitting `caller_said` / `cate_said`. `MODEL=nova` (Saturday) implements the same interface with Nova 2 Sonic.
@@ -145,13 +145,11 @@ payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
 
 | Route | Who | Protection |
 |---|---|---|
-| `POST /twilio/voice` | Twilio | `X-Twilio-Signature`; one call at a time; unknown number → short message + hang up |
-| `WS /twilio/stream` | Twilio | one-time token passed as `<Parameter>`, checked in `start` |
-| `POST /twilio/sms` | Twilio | signature; `PAY` only from the delegate's number, only while held |
+| `WS /local/stream` | the Bluetooth audio bridge on the team laptop | local only (no `X-Forwarded-For`) + admin secret (`?key=`); one call at a time |
 | `GET /v/:code` | Mr Wong, Daniel | random code; read-only; headers `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
 | `GET /pay/:code`, `POST /pay/:code` | the payer: Mr Wong (Pay button on his trip page) or Daniel (pay email) | the trip page's random code; only while the booking is held (after payment, GET shows the receipt); POST takes one field `method` from `METHODS`, body ≤ 2 KB, then 303 back to GET; no card or personal fields; headers as `/v/` plus a nonce CSP and `X-Frame-Options: DENY` |
 | `GET /projector` + `WS /events` | team laptop | admin secret (`?key=`) |
-| `POST /reset`, `POST /dev/simulate` | team laptop | admin secret (`x-admin-key` header) |
+| `POST /reset`, `POST /dev/simulate`, `POST /dev/pay` | team laptop | admin secret (`x-admin-key` header) |
 | `/mock-cathay/*` | our own `cathay.js` | local only |
 | everything else, including `/` | nobody | the same "Not found" |
 
@@ -168,12 +166,19 @@ payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
 - Eighth tool `ask_cathay({ question })` for general Cathay questions (RAG, `onday/RAG-PLAN.md` in the planning folder). It reads `deps.knowledge.search(question, limit) → Promise<[{ title, text, source, checked }]>`, which returns `[]` when nothing is relevant enough. The search is `src/knowledge.js`: `loadPassages()` reads `knowledge/*.md` (format in the file header; a passage without `Source` and `Checked` is skipped) and `createKnowledge({ passages, mode })` gives `{ search }`. `KNOWLEDGE=keyword` matches words and needs half the question's weighted words in a passage; `KNOWLEDGE=embeddings` is not built. `knowledge/` holds 23 draft passages (`Checked: 2026-11-14 draft`, not yet verified against Cathay's pages). `ask_cathay` also emits a `screen` event with `what: "knowledge"` naming the source. Details: `docs/TOOLS.md` §8.
 - `server.js` exports `wireApp()` (real modules) besides `createApp(deps)` (injected, for tests).
 
+## Changes on 2026-11-14: no Twilio, a Bluetooth phone line
+
+- The phone number is a standby phone paired with the team laptop over Bluetooth. An audio bridge on the laptop moves the call audio; Twilio, μ-law and signature checks are gone (`src/twilio.js` → `src/phone.js`, `src/mulaw.js` removed, `twilio` package removed).
+- `WS /local/stream?key=<ADMIN_SECRET>` (this machine only). The bridge sends text `{"event":"start"}` when the phone answers, then **binary** frames of PCM16 little-endian, 8 kHz mono (20 ms = 320 bytes is ideal; any even length works). The server sends binary frames in the same format to play, `{"event":"clear"}` on a barge-in (drop the audio not yet played), and `{"event":"busy"}` (then closes) if a call is already live. Hang-up: the bridge closes the socket; the server ends a call (for example on `/reset`) by closing it.
+- Bluetooth gives the laptop no caller ID: a call on the local line is from DEMO-0001's number, as with `/dev/simulate`.
+- No SMS in or out. Texts go by email (`TEXTS=email`, the default); `TEXTS=sms` only prints and is refused in live mode. There is no "Reply PAY": `POST /dev/pay` (admin) pays the latest held booking through `onPaid(ref, 'demo')`, 409 if nothing is held. The wrong-signature 403 is gone with Twilio.
+
 ## File ownership (tonight)
 
 | Owner | Files |
 |---|---|
 | shared (done) | `src/config.js`, `src/events.js`, `src/store.js`, `data/*`, this file, `CLAUDE.md`, `package.json` |
 | Agent A: tools | `src/tools.js`, `src/cathay.js`, `src/mock-cathay/*`, `test/tools.test.js`, `test/cathay.test.js` |
-| Agent B: server | `src/server.js`, `src/twilio.js`, `src/mulaw.js`, `src/messages.js`, `src/payment.js`, `test/server.test.js`, `test/mulaw.test.js` |
+| Agent B: server | `src/server.js`, `src/phone.js` (was `twilio.js`), `src/messages.js`, `src/payment.js`, `test/server.test.js` |
 | Agent C: screens | `src/screens/*`, `test/screens.test.js` |
 | Integration (after) | `src/model/scripted.js`, wiring fixes |

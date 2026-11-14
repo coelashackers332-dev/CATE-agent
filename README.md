@@ -35,13 +35,14 @@ The 8 tools, with their inputs, results and rules, are documented in [`docs/TOOL
 
 ## Architecture
 
-![CATE architecture: Twilio phone line → Amazon EC2 → Amazon Bedrock Nova Sonic](docs/architecture.png)
-
 ```
-Caller's phone ──► Twilio (phone number, call audio 8 kHz μ-law, SMS)
-                     │ WebSocket
+Caller's phone ──► standby phone (the number Mr Wong calls)
+                     │ Bluetooth: the call's audio
                      ▼
-                  CATE server (Node.js, Amazon EC2, Tokyo)
+                  audio bridge on the laptop
+                     │ WebSocket /local/stream: 8 kHz PCM16 both ways
+                     ▼
+                  CATE server (Node.js, on the same laptop)
                     ├─ tools: verify_caller · apply_profile · find_flights · set_assistance
                     │         hold_booking · text_options · send_pay_link
                     ├─ cathay.js ──► mock Cathay systems (Membership · Orders · Schedule)
@@ -58,13 +59,14 @@ Caller's phone ──► Twilio (phone number, call audio 8 kHz μ-law, SMS)
 |---|---|
 | Module contracts (`CONTRACTS.md`), configuration, event log, in-memory store, seed data | ✅ Done |
 | Mock Cathay systems + adapter, the 7 booking tools and their rules | ✅ Done, tested |
-| Server: Twilio webhook and call audio, signature checks, view-only pages, reset | ✅ Done, tested with simulated requests; not yet run against a live Twilio number |
+| Server: local phone line for the Bluetooth bridge, view-only pages, reset | ✅ Done, tested with a simulated bridge; not yet run with the real phone |
 | Screens: projector view, trip page with needs card, texts, pay email | ✅ Done, tested |
-| Payment: family member replies PAY by text | ✅ Done, tested |
+| Payment: the family member pays (on stage the operator triggers it with `POST /dev/pay`) | ✅ Done, tested |
 | Scripted stand-in for the voice model (plays the golden path, no audio) | ✅ Done |
 | General Cathay questions (`ask_cathay`): search over passages in `knowledge/`, source shown on the projector | ✅ Tool and keyword search done, tested. The 23 passages are drafts, not yet verified against Cathay's pages. Search by meaning (embeddings) is planned. |
-| Voice model: Amazon Nova 2 Sonic over the call audio | Planned |
-| Real schedules (OAG snapshot), live SMS and email, Stripe test checkout | Planned |
+| Voice model: Amazon Nova 2 Sonic over the call audio (`MODEL=nova`) | In progress: driver written and unit-tested, not yet run against Bedrock |
+| Live email, texts sent as email (`TEXTS=email`) | ✅ Done, tested |
+| Real schedules (OAG snapshot), Stripe test checkout | Planned |
 
 ## Repo layout
 
@@ -72,19 +74,18 @@ Caller's phone ──► Twilio (phone number, call audio 8 kHz μ-law, SMS)
 CONTRACTS.md          interfaces between modules (read before writing code)
 CLAUDE.md             working rules for this repo
 data/                 seed data for the mock Cathay systems (JSON)
-docs/                 architecture diagram, TOOLS.md (the 8 tools)
+docs/                 TOOLS.md (the 8 tools)
 src/server.js         HTTP routes, projector feed, wiring
-src/twilio.js         call webhook, call audio stream, PAY reply
-src/mulaw.js          phone audio conversion (G.711 mu-law <-> PCM)
+src/phone.js          the phone line: call audio from the Bluetooth bridge, life of a call
 src/tools.js          the 8 tools and their rules
 src/knowledge.js      search over the knowledge passages (for ask_cathay)
 knowledge/            general Cathay knowledge: short passages, each with source and date checked
 src/cathay.js         the one adapter to Cathay's systems
 src/mock-cathay/      mock Membership, Orders and Schedule systems
-src/model/            voice model drivers (scripted.js; nova.js to come)
+src/model/            voice model drivers (scripted.js, nova.js)
 src/screens/          projector view, trip page, texts, emails
 src/payment.js        what happens when a booking is paid
-src/messages.js       SMS and email sending (log or live)
+src/messages.js       texts and email (log, or live by email)
 src/config.js, events.js, store.js   settings, event bus + run log, in-memory state
 test/                 node --test; golden.test.js plays the whole booking
 ```
@@ -104,7 +105,7 @@ To play the whole booking without a phone (`MODEL=scripted`), open the projector
 
 ```sh
 curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/simulate          # the call
-curl -X POST -d "From=%2B85200000002&Body=PAY" http://localhost:8080/twilio/sms           # Daniel pays
+curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/dev/pay               # Daniel pays
 curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/reset                 # start again
 ```
 
@@ -117,9 +118,9 @@ All settings are in `.env.example`. `MODEL=scripted` runs the golden path withou
 - **No real personal data in git.** The demo caller's and family member's real phone numbers live only in `.env` (never committed); the seed data uses placeholders.
 - **Minimum data to the model.** After verification the model gets name, preferences, needs and recent trips, never phone numbers, email addresses or the family member's contact details.
 - **View-only links.** Trip pages open only from a 128-bit random link created during a call. They are read-only, never indexed, never cached, and show only name, flights and needs.
-- **Signed requests.** Every request from Twilio (and from Stripe) is checked for its signature. The projector view and reset need an admin secret.
+- **Local phone line.** Call audio is accepted only from this machine (not through a tunnel or proxy) and only with the admin secret. The projector view, reset and the `/dev` routes need the admin secret too.
 - **One call at a time,** so a second caller can't change the demo's state.
 
 ## Licences
 
-Direct dependencies: [`ws`](https://github.com/websockets/ws) (MIT) and [`twilio`](https://github.com/twilio/twilio-node) (MIT). All 53 installed packages, including indirect ones, use permissive licences (MIT, BSD-3-Clause, Apache-2.0, ISC); none is copyleft. All code in this repo was written for this hackathon.
+Direct dependencies: [`ws`](https://github.com/websockets/ws) (MIT) and the AWS SDK for JavaScript (`@aws-sdk/client-bedrock-runtime`, `@smithy/node-http-handler`; Apache-2.0). All 29 installed packages, including indirect ones, use permissive licences (Apache-2.0, MIT, 0BSD); none is copyleft. All code in this repo was written for this hackathon.

@@ -9,11 +9,6 @@ import { bus } from '../src/events.js';
 import { store } from '../src/store.js';
 import { createMessages } from '../src/messages.js';
 
-// Tests load .env, and a real Twilio login there must never be used here: with these empty,
-// a text that wrongly went to Twilio would fail instead of reaching a phone.
-config.twilio.accountSid = '';
-config.twilio.authToken = '';
-
 const USER = 'cate.team@example.com';
 const PASS = 'abcd efgh ijkl mnop';   // as Google shows an app password
 const TO = 'daniel@example.com';
@@ -187,7 +182,7 @@ test('texts by email: a number on file written with spaces, as people type it in
   const onFile = member.phone;
   member.phone = '+852 0000 0042';
   try {
-    await live({}, 'email').sendSms('+85200000042', 'Cathay CATE: your Vancouver flights');   // as Twilio gives the caller's number
+    await live({}, 'email').sendSms('+85200000042', 'Cathay CATE: your Vancouver flights');   // as the caller's number is stored on the call
   } finally {
     member.phone = onFile;
   }
@@ -198,6 +193,13 @@ test('texts by email: a number with no address on file is refused before any con
   const failure = await live({ connect: () => assert.fail('must not connect') }, 'email')
     .sendSms('+85200000098', 'Cathay CATE: hello').then(() => null, (err) => err);
   assert.equal(failure.message, 'SMS to ***0098 by email (no address on file) failed: no email address on file for that number');
+  assert.deepEqual(events.filter((e) => e.system === 'Messages').map((e) => [e.ok, e.summary]), [[false, '✗ text not sent']]);
+});
+
+test('TEXTS=sms in live mode: there is no SMS sender, so the text is refused and nothing connects', async () => {
+  const failure = await live({ connect: () => assert.fail('must not connect') }, 'sms')
+    .sendSms(wong().phone, 'Cathay CATE: hello').then(() => null, (err) => err);
+  assert.match(failure.message, /^SMS to \*\*\*\d{4} failed: there is no SMS sender: set TEXTS=email$/);
   assert.deepEqual(events.filter((e) => e.system === 'Messages').map((e) => [e.ok, e.summary]), [[false, '✗ text not sent']]);
 });
 

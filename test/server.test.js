@@ -1,7 +1,6 @@
 import test, { before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import twilio from 'twilio';
 import { WebSocket } from 'ws';
 import { config } from '../src/config.js';
 import { store, findOrder } from '../src/store.js';
@@ -9,14 +8,10 @@ import { bus, emit } from '../src/events.js';
 import { createApp } from '../src/server.js';
 import { createPayment } from '../src/payment.js';
 import { createMessages } from '../src/messages.js';
-import { decode, encode } from '../src/mulaw.js';
 
 // Fixed test settings, whatever a local .env says: placeholder numbers only, no real ones.
 Object.assign(config, { baseUrl: 'https://cate.test', adminSecret: 'test-admin', demoCallerNumber: '', demoCallerEmail: '', danielPhone: '', danielEmail: '' });
-const AUTH = 'test-auth-token';
 const WONG = '+85200000001';
-const DANIEL = '+85200000002';
-const STRANGER = '+85200000009';
 
 // Stubs for the modules other people write.
 const sessions = [];
@@ -57,21 +52,11 @@ after(() => {
 beforeEach(() => {
   for (const ws of sockets.splice(0)) ws.terminate();
   store.reset({ log: false });
-  config.twilio.authToken = AUTH;
   sessions.length = sent.length = paidCalls.length = 0;
 });
 
 const get = (path, headers) => fetch(base + path, { headers });
 const post = (path, headers) => fetch(base + path, { method: 'POST', headers });
-function twilioPost(path, params, signature = twilio.getExpectedTwilioSignature(AUTH, config.baseUrl + path, params), extra = {}) {
-  return fetch(base + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...(signature && { 'X-Twilio-Signature': signature }), ...extra },
-    body: new URLSearchParams(params),
-  });
-}
-const callFrom = (from) => twilioPost('/twilio/voice', { CallSid: 'CAtest', From: from, To: '+85200000000' });
-const smsFrom = (from, body) => twilioPost('/twilio/sms', { MessageSid: 'SMtest', From: from, Body: body });
 
 async function until(check, what = 'condition') {
   for (let i = 0; i < 200; i++) {
@@ -80,10 +65,11 @@ async function until(check, what = 'condition') {
   }
   assert.fail(`timed out waiting for ${what}`);
 }
-async function openSocket(path) {
-  const ws = new WebSocket(base.replace('http', 'ws') + path);
+async function openSocket(path, headers) {
+  const ws = new WebSocket(base.replace('http', 'ws') + path, { headers });
   ws.received = [];
-  ws.on('message', (raw) => ws.received.push(JSON.parse(raw)));
+  // Text frames are JSON events; binary frames (call audio) stay Buffers.
+  ws.on('message', (raw, isBinary) => ws.received.push(isBinary ? raw : JSON.parse(raw)));
   sockets.push(ws);
   // A refused upgrade arrives as 'error', which events.once() would turn into a rejection.
   await new Promise((done) => { ws.on('open', done); ws.on('close', done); ws.on('error', done); });
@@ -96,7 +82,7 @@ const holdOrder = (ref = 'K7Q2XM') => {
 
 test('/, unknown paths and refused admin routes give the same 404', async () => {
   const replies = await Promise.all([
-    get('/'), get('/nope'), get('/v/'), get('/twilio/voice'), post('/twilio/nope'),
+    get('/'), get('/nope'), get('/v/'), get('/local/stream'), post('/dev/pay', { 'x-admin-key': 'wrong' }),
     get('/projector'), get('/projector?key=wrong'), post('/reset'), post('/reset', { 'x-admin-key': 'wrong' }),
     post('/dev/simulate', { 'x-admin-key': 'wrong' }), get('/events?key=test-admin'),
   ]);
@@ -112,7 +98,7 @@ test('/projector and /reset work with the admin key', async () => {
   assert.equal(await page.text(), '<html>projector</html>');
 
   holdOrder();
-  await callFrom(WONG);
+  await post('/dev/simulate', { 'x-admin-key': 'test-admin' });
   assert.ok(store.activeCall);
   const refused = await post('/reset', { 'x-admin-key': 'wrong' });
   assert.equal(refused.status, 404);
@@ -124,105 +110,72 @@ test('/projector and /reset work with the admin key', async () => {
   assert.equal(store.activeCall, null);
 });
 
-test('voice webhook: bad or missing signature is refused', async () => {
-  const params = { CallSid: 'CAtest', From: WONG };
-  for (const signature of ['bm90IGEgc2lnbmF0dXJl', null]) {
-    const r = await twilioPost('/twilio/voice', params, signature);
-    assert.equal(r.status, 403);
+test('local line: only this machine with the admin key may connect', async () => {
+  for (const path of ['/local/stream', '/local/stream?key=wrong']) {
+    const ws = await openSocket(path);
+    assert.notEqual(ws.readyState, WebSocket.OPEN, path);
   }
-  // A signature for other parameters does not carry over.
-  const other = twilio.getExpectedTwilioSignature(AUTH, config.baseUrl + '/twilio/voice', { ...params, From: STRANGER });
-  assert.equal((await twilioPost('/twilio/voice', params, other)).status, 403);
-  assert.equal(store.activeCall, null);
+  // Through a tunnel or proxy (X-Forwarded-For) even the right key is refused.
+  const proxied = await openSocket('/local/stream?key=test-admin', { 'X-Forwarded-For': '203.0.113.7' });
+  assert.notEqual(proxied.readyState, WebSocket.OPEN);
+  assert.equal(sessions.length, 0);
 });
 
-test('voice webhook: no auth token set → unsigned requests pass only from this machine', async () => {
-  config.twilio.authToken = '';
-  const proxied = await twilioPost('/twilio/voice', { From: WONG }, null, { 'X-Forwarded-For': '203.0.113.7' });
-  assert.equal(proxied.status, 403);
-  const local = await twilioPost('/twilio/voice', { From: WONG }, null);
-  assert.equal(local.status, 200);
-});
-
-test('voice webhook: known caller gets a stream with a one-time token and a call context', async () => {
-  const r = await callFrom(WONG);
-  assert.equal(r.status, 200);
-  assert.match(r.headers.get('content-type'), /text\/xml/);
-  const twiml = await r.text();
-  assert.match(twiml, /<Connect><Stream url="wss:\/\/cate\.test\/twilio\/stream"><Parameter name="token" value="[\w-]{20,}"\/>/);
-  assert.ok(!twiml.includes(WONG), 'the caller number stays out of the TwiML');
-  assert.deepEqual(store.activeCall, {
-    id: store.activeCall.id, callerId: WONG, memberId: null, token: null, verified: false, options: [],
+test('local line: start makes a call for DEMO-0001; PCM16 both ways as binary frames; clear on interrupt; close frees the line', async () => {
+  const ws = await openSocket('/local/stream?key=test-admin');
+  ws.send(JSON.stringify({ event: 'start' }));
+  await until(() => store.activeCall?.session, 'the model session');
+  const call = store.activeCall;
+  const session = sessions[0];
+  assert.deepEqual({ ...call, session: null }, {
+    id: call.id, callerId: WONG, memberId: null, token: null, verified: false, options: [],
     pageCode: null, pendingHold: null, assistance: null, ref: null, session: null,
   });
-  assert.match(store.activeCall.id, /^c\d+$/);
-});
-
-test('voice webhook: one call at a time', async () => {
-  await callFrom(WONG);
-  const first = store.activeCall;
-  const twiml = await (await callFrom(WONG)).text();
-  assert.match(twiml, /<Say>.*another call.*<\/Say><Hangup\/>/);
-  assert.ok(!twiml.includes('<Stream'));
-  assert.equal(store.activeCall, first);
-});
-
-test('voice webhook: unknown number hears a short message and the call ends', async () => {
-  const twiml = await (await callFrom(STRANGER)).text();
-  assert.match(twiml, /<Say>.*not registered.*<\/Say><Hangup\/>/);
-  assert.ok(!twiml.includes('<Stream'));
-  assert.equal(store.activeCall, null);
-});
-
-test('call audio: token check, μ-law both ways in 20 ms frames, clear on interrupt, stop frees the line', async () => {
-  const token = (await (await callFrom(WONG)).text()).match(/name="token" value="([^"]+)"/)[1];
-  const call = store.activeCall;
-
-  // A stream with the wrong token is dropped and does not start the model.
-  const intruder = await openSocket('/twilio/stream');
-  intruder.send(JSON.stringify({ event: 'start', start: { streamSid: 'MZbad', customParameters: { token: 'guess' } } }));
-  await once(intruder, 'close');
-  assert.equal(sessions.length, 0);
-
-  const ws = await openSocket('/twilio/stream');
-  ws.send(JSON.stringify({ event: 'connected' }));
-  ws.send(JSON.stringify({ event: 'start', start: { streamSid: 'MZtest', customParameters: { token } } }));
-  await until(() => call.session, 'the model session');
-  const session = sessions[0];
   assert.equal(session.args.call, call);
   assert.equal(session.args.specs, deps.tools.specs);
   assert.equal(session.args.runTool, deps.tools.runTool);
   assert.equal(session.args.emit, emit);
 
-  // caller → model
+  // caller → model: 20 ms of 8 kHz PCM16 little-endian, plus a stray odd byte that is dropped
   const tone = Int16Array.from({ length: 160 }, (_, i) => Math.round(8000 * Math.sin(i / 5)));
-  ws.send(JSON.stringify({ event: 'media', media: { payload: encode(tone).toString('base64') } }));
+  const bytes = Buffer.alloc(321);
+  tone.forEach((s, i) => bytes.writeInt16LE(s, i * 2));
+  ws.send(bytes);
   await until(() => session.audio.length === 1, 'caller audio');
   assert.ok(session.audio[0] instanceof Int16Array);
-  assert.deepEqual(session.audio[0], decode(encode(tone)));
+  assert.deepEqual(session.audio[0], tone);
 
-  // model → caller: 400 samples = 2 full frames + the rest
-  const reply = Int16Array.from({ length: 400 }, (_, i) => i * 50);
+  // model → caller, then a barge-in
+  const reply = Int16Array.from({ length: 400 }, (_, i) => i * 50 - 10_000);
   session.args.sendAudio(reply);
   session.args.onInterrupt();
-  await until(() => ws.received.length === 4, 'audio frames and clear');
-  const frames = ws.received.slice(0, 3);
-  assert.deepEqual(frames.map((m) => [m.event, m.streamSid, Buffer.from(m.media.payload, 'base64').length]),
-    [['media', 'MZtest', 160], ['media', 'MZtest', 160], ['media', 'MZtest', 80]]);
-  assert.deepEqual(Buffer.concat(frames.map((m) => Buffer.from(m.media.payload, 'base64'))), encode(reply));
-  assert.deepEqual(ws.received[3], { event: 'clear', streamSid: 'MZtest' });
+  await until(() => ws.received.length === 2, 'audio and clear');
+  const out = ws.received[0];
+  assert.ok(Buffer.isBuffer(out));
+  assert.deepEqual(Int16Array.from({ length: out.length / 2 }, (_, i) => out.readInt16LE(i * 2)), reply);
+  assert.deepEqual(ws.received[1], { event: 'clear' });
 
-  // The token was used up: a second stream cannot join the call.
-  const replay = await openSocket('/twilio/stream');
-  replay.send(JSON.stringify({ event: 'start', start: { streamSid: 'MZreplay', customParameters: { token } } }));
-  await once(replay, 'close');
-  assert.equal(sessions.length, 1);
+  // One call at a time: a second bridge hears busy and is closed; the first call is untouched.
+  const second = await openSocket('/local/stream?key=test-admin');
+  second.send(JSON.stringify({ event: 'start' }));
+  await once(second, 'close');
+  assert.deepEqual(second.received, [{ event: 'busy' }]);
   assert.equal(store.activeCall, call);
+  assert.equal(sessions.length, 1);
 
-  ws.send(JSON.stringify({ event: 'stop' }));
+  ws.close();
   await until(() => store.activeCall === null, 'the line to be free');
   assert.equal(session.closed, 1);
   assert.equal(call.session, null);
+});
+
+test('local line: /reset hangs up the bridge', async () => {
+  const ws = await openSocket('/local/stream?key=test-admin');
+  ws.send(JSON.stringify({ event: 'start' }));
+  await until(() => store.activeCall?.session, 'the model session');
+  await post('/reset', { 'x-admin-key': 'test-admin' });
+  await until(() => ws.readyState === WebSocket.CLOSED, 'the bridge socket to close');
+  assert.equal(sessions[0].closed, 1);
 });
 
 test('GET /v/:code: page with privacy headers; unknown and expired codes are the same 404', async () => {
@@ -248,24 +201,17 @@ test('GET /v/:code: page with privacy headers; unknown and expired codes are the
   assert.equal((await post('/v/good-code')).status, 404, 'read-only');
 });
 
-test('SMS PAY: only a signed text from the delegate, only while held', async () => {
+test('POST /dev/pay: admin key only; pays the held booking once; nothing held is a 409', async () => {
+  assert.equal((await post('/dev/pay', { 'x-admin-key': 'test-admin' })).status, 409);
   const ref = holdOrder();
-  assert.equal((await twilioPost('/twilio/sms', { From: DANIEL, Body: 'PAY' }, 'bad')).status, 403);
-  for (const [from, body] of [[STRANGER, 'PAY'], [WONG, 'PAY'], [DANIEL, 'PAY NOW'], [DANIEL, 'hello']]) {
-    const r = await smsFrom(from, body);
-    assert.equal(r.status, 200);
-    assert.match(await r.text(), /<Response\/>$/);
-  }
-  assert.deepEqual(paidCalls, []);
+  assert.equal((await post('/dev/pay', { 'x-admin-key': 'wrong' })).status, 404);
   assert.equal(findOrder(ref).status, 'held');
 
-  const r = await smsFrom(DANIEL, '  pay \n');
-  assert.match(await r.text(), /<Response\/>$/);
-  assert.deepEqual(paidCalls, [[ref, 'sms']]);
+  const r = await post('/dev/pay', { 'x-admin-key': 'test-admin' });
+  assert.deepEqual(await r.json(), { ok: true, ref });
+  assert.deepEqual(paidCalls, [[ref, 'demo']]);
   assert.equal(findOrder(ref).status, 'paid');
-
-  await smsFrom(DANIEL, 'PAY');   // nothing is held any more
-  assert.equal(paidCalls.length, 1);
+  assert.equal((await post('/dev/pay', { 'x-admin-key': 'test-admin' })).status, 409, 'nothing is held any more');
 });
 
 test('onPaid twice changes state once: one state event, one text 2, one notify', async () => {
@@ -332,7 +278,10 @@ test('POST /dev/simulate starts a call for DEMO-0001 without a phone', async () 
   sessions[0].args.onInterrupt();
 
   assert.equal((await post('/dev/simulate', { 'x-admin-key': 'test-admin' })).status, 409);
-  assert.match(await (await callFrom(WONG)).text(), /another call/, 'a phone call during a simulated one is busy');
+  const bridge = await openSocket('/local/stream?key=test-admin');
+  bridge.send(JSON.stringify({ event: 'start' }));
+  await once(bridge, 'close');
+  assert.deepEqual(bridge.received, [{ event: 'busy' }], 'a phone call during a simulated one is busy');
   await post('/reset', { 'x-admin-key': 'test-admin' });
   assert.equal(sessions[0].closed, 1);
 });

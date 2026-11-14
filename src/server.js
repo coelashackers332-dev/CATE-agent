@@ -1,5 +1,6 @@
-// The one HTTP server: Twilio webhooks + call audio, view-only trip pages, the projector view, reset.
+// The one HTTP server: the local phone line (call audio), view-only trip pages, the projector view, reset.
 // Routes: CONTRACTS.md section 7. Anything not listed there gets the same "Not found" page.
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -7,7 +8,7 @@ import { WebSocketServer } from 'ws';
 import { config } from './config.js';
 import { bus } from './events.js';
 import { store, findOrder, findMember } from './store.js';
-import { createTwilio, isLocal, safeEqual } from './twilio.js';
+import { createPhone } from './phone.js';
 import { createMessages } from './messages.js';
 import { createPayment } from './payment.js';
 import { createKnowledge, loadPassages } from './knowledge.js';
@@ -17,7 +18,16 @@ const RECENT_MAX = 200;
 const PRIVATE = { 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' };
 const html = (res, status, body) => res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', ...PRIVATE }).end(body);
 const json = (res, status, body) => res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }).end(JSON.stringify(body));
+const sha = (v) => createHash('sha256').update(String(v ?? '')).digest();
+/** Compare two secrets without leaking where they differ. */
+export const safeEqual = (a, b) => Boolean(a) && Boolean(b) && timingSafeEqual(sha(a), sha(b));
 const isAdmin = (key) => safeEqual(key, config.adminSecret);
+
+/** True only for a request made on this machine and not passed on by a tunnel or proxy (those add X-Forwarded-For). */
+export function isLocal(req) {
+  const ip = req.socket.remoteAddress ?? '';
+  return (ip === '::1' || ip.replace(/^::ffff:/, '').startsWith('127.')) && !req.headers['x-forwarded-for'];
+}
 
 /**
  * @param {object} deps  { tools: { specs, runTool }, startSession, renderTripPage, notFoundPage,
@@ -26,7 +36,7 @@ const isAdmin = (key) => safeEqual(key, config.adminSecret);
  */
 export function createApp(deps) {
   const { tools, startSession, renderTripPage, notFoundPage, projectorHtml, handleMockCathay, payment } = deps;
-  const phoneLine = createTwilio({ tools, startSession, payment });
+  const phoneLine = createPhone({ tools, startSession });
   const notFound = (res) => html(res, 404, notFoundPage());
 
   // Projector feed: the last events for a view that connects late, then every new event as it happens.
@@ -52,8 +62,6 @@ export function createApp(deps) {
     const [path, query] = req.url.split('?');
     const is = (method, p) => req.method === method && path === p;
 
-    if (is('POST', '/twilio/voice')) return phoneLine.voice(req, res);
-    if (is('POST', '/twilio/sms')) return phoneLine.sms(req, res);
     if (req.method === 'GET' && path.startsWith('/v/')) return tripPage(path.slice(3), res);
     if (path.startsWith('/pay/')) return payment.payRoute(req, res, path.slice(5), () => notFound(res));
     if (is('GET', '/projector') && isAdmin(new URLSearchParams(query).get('key'))) return html(res, 200, projectorHtml);
@@ -65,6 +73,13 @@ export function createApp(deps) {
     if (is('POST', '/dev/simulate') && isAdmin(req.headers['x-admin-key'])) {
       const call = await phoneLine.simulate();
       return call ? json(res, 200, { ok: true, call_id: call.id }) : json(res, 409, { ok: false, error: 'a call is already live; POST /reset first' });
+    }
+    // Daniel pays: on stage, the operator presses this when Daniel acts on the pay request (there is no SMS reply line).
+    if (is('POST', '/dev/pay') && isAdmin(req.headers['x-admin-key'])) {
+      const order = store.orders.findLast((o) => o.status === 'held');
+      if (!order) return json(res, 409, { ok: false, error: 'no booking is waiting for payment' });
+      await payment.onPaid(order.ref, 'demo');
+      return json(res, 200, { ok: true, ref: order.ref });
     }
     if (path.startsWith('/mock-cathay/') && isLocal(req) && await handleMockCathay(req, res)) return;
     notFound(res);
@@ -81,7 +96,10 @@ export function createApp(deps) {
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
     const [path, query] = req.url.split('?');
-    if (path === '/twilio/stream') return wss.handleUpgrade(req, socket, head, phoneLine.stream);
+    // The Bluetooth bridge runs on this laptop: local only, plus the admin key.
+    if (path === '/local/stream' && isLocal(req) && isAdmin(new URLSearchParams(query).get('key'))) {
+      return wss.handleUpgrade(req, socket, head, phoneLine.local);
+    }
     if (path === '/events' && isAdmin(new URLSearchParams(query).get('key'))) {
       return wss.handleUpgrade(req, socket, head, (ws) => {
         for (const ev of recent) ws.send(JSON.stringify(ev));
