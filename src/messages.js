@@ -1,5 +1,7 @@
 // Outgoing SMS and email. mode 'log' prints them to the console; 'live' sends SMS through Twilio and email
 // through a mail account (EMAIL_USER + EMAIL_APP_PASSWORD in .env: a Gmail address and its app password).
+// TEXTS=email in .env sends each text as an email instead, to the address on file for that phone number:
+// for when the Twilio number cannot send texts.
 import { randomUUID } from 'node:crypto';
 import tls from 'node:tls';
 import twilio from 'twilio';
@@ -12,6 +14,8 @@ const SMTP_TIMEOUT_MS = 20_000;
 const maskPhone = (n) => `***${String(n).slice(-4)}`;
 const maskEmail = (a) => String(a).replace(/^(.).*@/, '$1***@');
 const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
+/** Twilio's and the mail server's error text can quote a number or an address: mask them before anything logs it. */
+const scrub = (s) => String(s).replace(/\+\d{7,15}/g, maskPhone).replace(/[^\s<>()"']+@[^\s<>()"']+/g, maskEmail);
 
 // Events never carry phone numbers or email addresses, so the projector only sees that a message went out.
 function report(action, ok, summary) {
@@ -20,6 +24,27 @@ function report(action, ok, summary) {
 
 /** The mail account from .env. Read here, so the shared config.js stays unchanged. */
 const emailFromEnv = () => ({ user: process.env.EMAIL_USER ?? '', pass: process.env.EMAIL_APP_PASSWORD ?? '' });
+
+/** How texts go: sms (through Twilio, the default) or email. Read here too, for the same reason. */
+const textsFromEnv = () => (process.env.TEXTS || 'sms').trim().toLowerCase();
+
+/**
+ * TEXTS=email: the address on file for a phone number, the member's own or their family payer's.
+ * Texts still only reach people on file: every number we text comes from the membership data, never from the model.
+ * Numbers match the way the phone line matches callers: "+852 0000 0001" in .env is the same as Twilio's "+85200000001".
+ * ponytail: reads the demo membership data. Production = the contact details in Cathay's member profile.
+ */
+function inboxFor(phone) {
+  const digits = (n) => String(n ?? '').replace(/[^\d+]/g, '');
+  const wanted = digits(phone);
+  if (!wanted) return null;
+  for (const member of store.members) {
+    if (digits(member.phone) === wanted) return member.email;
+    const delegate = member.delegates?.find((d) => digits(d.phone) === wanted);
+    if (delegate) return delegate.email;
+  }
+  return null;
+}
 
 /** A header value: one line (so it can never start a new header), non-ASCII as an RFC 2047 encoded word. */
 function headerText(value) {
@@ -90,24 +115,41 @@ function smtpSend({ user, pass, host = 'smtp.gmail.com', port = 465, connect = t
   });
 }
 
-export function createMessages({ mode = config.messages, email = emailFromEnv() } = {}) {
+export function createMessages({ mode = config.messages, email = emailFromEnv(), texts = textsFromEnv() } = {}) {
+  // A typo here would only show on stage, as texts that never arrive: stop the server at start instead.
+  if (texts !== 'sms' && texts !== 'email') throw new Error(`TEXTS must be sms or email, not "${texts}"`);
   let client = null;
+
+  // The checks come first, so a missing login or a bad address never opens a connection.
+  async function mail(to, subject, html, text) {
+    if (!/^\S+@\S+$/.test(email.user ?? '') || !email.pass) throw new Error('live email needs EMAIL_USER (the full address) and EMAIL_APP_PASSWORD in .env');
+    if (!/^[^\s<>]+@[^\s<>]+$/.test(to ?? '')) throw new Error('that is not an email address');
+    await smtpSend(email, { to, subject, html, text });
+  }
 
   return {
     async sendSms(to, body) {
+      const inbox = texts === 'email' ? inboxFor(to) : null;
+      const how = texts === 'email' ? ` by email (${inbox ? maskEmail(inbox) : 'no address on file'})` : '';
       if (mode !== 'live') {
-        console.log(`[SMS] to ${maskPhone(to)}\n${body}\n`);
+        console.log(`[SMS] to ${maskPhone(to)}${how}\n${body}\n`);
         report('send_sms', true, '✓ text sent (printed, not sent to a phone)');
         return;
       }
       try {
-        client ??= twilio(config.twilio.accountSid, config.twilio.authToken);
-        await client.messages.create({ from: config.twilio.number, to, body });
+        if (texts === 'email') {
+          if (!inbox) throw new Error('no email address on file for that number');
+          // The same words as the text; its first line ("Cathay CATE: booked. Ref ...") is the subject.
+          await mail(inbox, String(body).split('\n')[0], null, body);
+        } else {
+          client ??= twilio(config.twilio.accountSid, config.twilio.authToken);
+          await client.messages.create({ from: config.twilio.number, to, body });
+        }
       } catch (err) {
         report('send_sms', false, '✗ text not sent');
-        throw new Error(`SMS to ${maskPhone(to)} failed: ${err.message}`);
+        throw new Error(`SMS to ${maskPhone(to)}${how} failed: ${scrub(err.message)}`);
       }
-      report('send_sms', true, '✓ text sent');
+      report('send_sms', true, texts === 'email' ? '✓ text sent by email' : '✓ text sent');
     },
 
     async sendEmail(to, subject, html, text) {
@@ -117,12 +159,10 @@ export function createMessages({ mode = config.messages, email = emailFromEnv() 
         return;
       }
       try {
-        if (!/^\S+@\S+$/.test(email.user ?? '') || !email.pass) throw new Error('live email needs EMAIL_USER (the full address) and EMAIL_APP_PASSWORD in .env');
-        if (!/^[^\s<>]+@[^\s<>]+$/.test(to ?? '')) throw new Error('that is not an email address');
-        await smtpSend(email, { to, subject, html, text });
+        await mail(to, subject, html, text);
       } catch (err) {
         report('send_email', false, '✗ email not sent');
-        throw new Error(`Email to ${maskEmail(to)} failed: ${err.message}`);
+        throw new Error(`Email to ${maskEmail(to)} failed: ${scrub(err.message)}`);
       }
       report('send_email', true, '✓ email sent');
     },
