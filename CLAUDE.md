@@ -21,7 +21,7 @@ Five teammates work in this repo at once, each with their own Claude. Setting up
 - **Edit only the user's own files.** Shared files (`server.js`, `twilio.js`, `config.js`, `events.js`, `store.js`, `cathay.js`, `mock-cathay/`, `CONTRACTS.md`, `package.json`): remind the user to announce the change in the team chat first, keep it small, and open a PR. Never edit another person's file to make tests pass; tell the user who owns it.
 - **Before merging:** `node --test` passes, rebase on `origin/main`, test again, then `git merge --ff-only` into `main` and push. Merge within 1–2 hours.
 - **Conflicts** in someone else's or a shared file: `git rebase --abort` and ask the owner. Don't resolve it for them.
-- **Never:** force-push, `git reset --hard` on `main`, `git add -A` without reading `git status`, commit `.env` or secrets, deploy (Harell only), merge after the Sun 03:00 freeze (Owen only).
+- **Never:** force-push, `git reset --hard` on `main`, `git add -A` without reading `git status`, commit `.env` or secrets, deploy (Marvel or Owen only), merge after the Sun 03:00 freeze (Owen only).
 
 ## Commands
 

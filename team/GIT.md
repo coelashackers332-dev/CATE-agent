@@ -8,16 +8,23 @@ Five people, five Claude Code agents, one repo. `main` must always run the golde
 
 | Owner | Files |
 |---|---|
-| **Owen** | `src/model/nova.js` (new), `src/mulaw.js` |
+The work is split by the call: Owen takes the start (the voice pipe), Marvel the middle (tools, rules, knowledge), Harell the end (payment, SMS, email). Owen and Marvel share deploy and the accounts.
+
+| Owner | Files |
+|---|---|
+| **Owen** | Voice pipe end to end: `src/model/nova.js` (new), `src/mulaw.js`, the voice half of `src/twilio.js` (voice route, audio stream, interruption, Twilio signature check) |
 | **Marvel** | `src/tools.js`, `src/knowledge.js`, `knowledge/`, `data/`, `src/model/prompt.js` (new: the system prompt + tool descriptions; `nova.js` imports it) |
-| **Harell** | `src/messages.js`, `src/payment.js`, deploy scripts (`deploy.sh`, Caddy config), `README.md`, `.env.example` |
-| **Cavell** | `src/screens/*` |
+| **Owen + Marvel** | Deploy and accounts: deploy scripts (`deploy.sh`, Caddy config), EC2, AWS and Twilio consoles, secrets, `README.md`, `.env.example` |
+| **Harell** | `src/messages.js` (SMS + email), `src/payment.js`, the SMS/payment half of `src/twilio.js`; payment-facing screens and design with Cavell |
+| **Cavell** | `src/screens/*` (call-facing screens); design with Harell. One person owns each screen: agree who in the team chat |
 | **Max** | no code. Deck and one-pager live outside the repo; `team/` |
-| **Shared** | `src/server.js`, `src/twilio.js` (Owen: audio stream · Harell: signature check), `src/config.js`, `src/events.js`, `src/store.js`, `src/cathay.js`, `src/mock-cathay/*`, `CONTRACTS.md`, `CLAUDE.md`, `package.json`, `package-lock.json` |
+| **Shared** | `src/server.js`, `src/config.js`, `src/events.js`, `src/store.js`, `src/cathay.js`, `src/mock-cathay/*`, `CONTRACTS.md`, `CLAUDE.md`, `package.json`, `package-lock.json` |
 
 Tests follow their code: a test that covers your file is yours too.
 
-**Shared files:** announce in the team chat first ("editing server.js: adding /twilio/sms route"), keep the change small, and merge it right away. A change to `CONTRACTS.md` needs an OK from every owner it affects. Only Harell adds dependencies: ask him, MIT / BSD / Apache-2.0 only.
+**`src/twilio.js`** has two halves until it is split into two files: Owen edits only the voice half, Harell only the SMS/payment half. The signature check lives once, in Owen's half; Harell's routes import it.
+
+**Shared files:** announce in the team chat first ("editing server.js: adding /twilio/sms route"), keep the change small, and merge it right away. A change to `CONTRACTS.md` needs an OK from every owner it affects. Only Owen adds dependencies: ask him, MIT / BSD / Apache-2.0 only.
 
 ## 2. Flow for each task
 
@@ -53,10 +60,11 @@ If `node --test` fails on `main`, whoever merged last fixes it before doing anyt
 
 ## 5. Gates, deploy, freeze
 
-- **Before each gate** (Sat 15:00, Sat 20:30): everyone merges 30 minutes early. Harell deploys `main` and the gate test runs on the server.
-- **Deploy:** only Harell, only `main`, through `deploy.sh`. Nobody edits code on the EC2 server; a fix made there is lost on the next deploy.
+- **Before each gate** (Sat 15:00, Sat 20:30): everyone merges 30 minutes early. Marvel (or Owen as backup) deploys `main` and the gate test runs on the server.
+- **Deploy:** only Marvel or Owen, one at a time, only `main`, through `deploy.sh`. Say "deploying" in the team chat before you run it, so the other doesn't deploy at the same time. Nobody edits code on the EC2 server; a fix made there is lost on the next deploy.
+- **Access:** keys, the SSH key and the server `.env` are handed over in person or through a password manager, never in chat or git.
 - **Code freeze Sun 03:00** (`git tag freeze`): after it, only `fix/<what>` branches, and **only Owen merges**. Ask him; don't merge yourself.
-- **Sun 10:15:** Harell deletes `team/` and the "Team" section of `CLAUDE.md`, runs `node --test`, `git tag submission`, push. Nothing is pushed after 10:30.
+- **Sun 10:15:** Marvel deletes `team/` and the "Team" section of `CLAUDE.md`, runs `node --test`, `git tag submission`, push. Nothing is pushed after 10:30.
 
 ## 6. Never
 
