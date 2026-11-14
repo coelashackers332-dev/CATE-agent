@@ -1,10 +1,9 @@
-// Outgoing SMS and email. mode 'log' prints them to the console; 'live' sends SMS through Twilio and email
-// through a mail account (EMAIL_USER + EMAIL_APP_PASSWORD in .env: a Gmail address and its app password).
-// TEXTS=email in .env sends each text as an email instead, to the address on file for that phone number:
-// for when the Twilio number cannot send texts.
+// Outgoing texts and email. mode 'log' prints them to the console; 'live' sends email through a mail account
+// (EMAIL_USER + EMAIL_APP_PASSWORD in .env: a Gmail address and its app password).
+// There is no SMS sender (the phone line is a Bluetooth phone, not Twilio), so with TEXTS=email (the default) each
+// text goes as an email to the address on file for that phone number. TEXTS=sms only prints.
 import { randomUUID } from 'node:crypto';
 import tls from 'node:tls';
-import twilio from 'twilio';
 import { config } from './config.js';
 import { emit } from './events.js';
 import { store } from './store.js';
@@ -14,7 +13,7 @@ const SMTP_TIMEOUT_MS = 20_000;
 const maskPhone = (n) => `***${String(n).slice(-4)}`;
 const maskEmail = (a) => String(a).replace(/^(.).*@/, '$1***@');
 const b64 = (s) => Buffer.from(String(s), 'utf8').toString('base64');
-/** Twilio's and the mail server's error text can quote a number or an address: mask them before anything logs it. */
+/** The mail server's error text can quote a number or an address: mask them before anything logs it. */
 const scrub = (s) => String(s).replace(/\+\d{7,15}/g, maskPhone).replace(/[^\s<>()"']+@[^\s<>()"']+/g, maskEmail);
 
 // Events never carry phone numbers or email addresses, so the projector only sees that a message went out.
@@ -25,13 +24,13 @@ function report(action, ok, summary) {
 /** The mail account from .env. Read here, so the shared config.js stays unchanged. */
 const emailFromEnv = () => ({ user: process.env.EMAIL_USER ?? '', pass: process.env.EMAIL_APP_PASSWORD ?? '' });
 
-/** How texts go: sms (through Twilio, the default) or email. Read here too, for the same reason. */
-const textsFromEnv = () => (process.env.TEXTS || 'sms').trim().toLowerCase();
+/** How texts go: email (the default) or sms (no sender: printed in log mode, refused in live mode). Read here too, for the same reason. */
+const textsFromEnv = () => (process.env.TEXTS || 'email').trim().toLowerCase();
 
 /**
  * TEXTS=email: the address on file for a phone number, the member's own or their family payer's.
  * Texts still only reach people on file: every number we text comes from the membership data, never from the model.
- * Numbers match the way the phone line matches callers: "+852 0000 0001" in .env is the same as Twilio's "+85200000001".
+ * Spaces and dashes don't matter: "+852 0000 0001" in .env is the same as "+85200000001".
  * ponytail: reads the demo membership data. Production = the contact details in Cathay's member profile.
  */
 function inboxFor(phone) {
@@ -118,7 +117,6 @@ function smtpSend({ user, pass, host = 'smtp.gmail.com', port = 465, connect = t
 export function createMessages({ mode = config.messages, email = emailFromEnv(), texts = textsFromEnv() } = {}) {
   // A typo here would only show on stage, as texts that never arrive: stop the server at start instead.
   if (texts !== 'sms' && texts !== 'email') throw new Error(`TEXTS must be sms or email, not "${texts}"`);
-  let client = null;
 
   // The checks come first, so a missing login or a bad address never opens a connection.
   async function mail(to, subject, html, text) {
@@ -142,8 +140,7 @@ export function createMessages({ mode = config.messages, email = emailFromEnv(),
           // The same words as the text; its first line ("Cathay CATE: booked. Ref ...") is the subject.
           await mail(inbox, String(body).split('\n')[0], null, body);
         } else {
-          client ??= twilio(config.twilio.accountSid, config.twilio.authToken);
-          await client.messages.create({ from: config.twilio.number, to, body });
+          throw new Error('there is no SMS sender: set TEXTS=email');
         }
       } catch (err) {
         report('send_sms', false, '✗ text not sent');

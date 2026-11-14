@@ -89,7 +89,7 @@ function eventQueue() {
 
 /**
  * CONTRACTS.md §5. Resolves once Bedrock has accepted the stream; rejects if it can't (no credentials, no model
- * access), which twilio.js turns into a log line and a hang-up. `client` is for tests.
+ * access), which phone.js turns into a log line and a hang-up. `client` is for tests.
  */
 export async function startSession({ call, specs, runTool, sendAudio, onInterrupt, emit, client }) {
   const s = settings();

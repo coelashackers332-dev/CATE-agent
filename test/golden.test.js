@@ -1,14 +1,12 @@
-// End to end, real modules, no phone: the scripted model plays the golden path, Daniel replies PAY,
+// End to end, real modules, no phone: the scripted model plays the golden path, Daniel pays (POST /dev/pay),
 // and the trip page turns into the confirmation with the needs card.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.SCRIPT_STEP_MS = '0';
 const { config } = await import('../src/config.js');
-// Fixed test settings, whatever a local .env says: nothing is really sent, the scripted model plays the call,
-// and the unsigned PAY below is accepted (with a Twilio token set, only signed requests are).
+// Fixed test settings, whatever a local .env says: nothing is really sent, and the scripted model plays the call.
 Object.assign(config, { messages: 'log', payment: 'sms', model: 'scripted' });
-config.twilio.authToken = '';
 const { store, findOrder } = await import('../src/store.js');
 const { bus } = await import('../src/events.js');
 const { wireApp } = await import('../src/server.js');
@@ -18,7 +16,7 @@ const until = async (check, what) => {
   assert.fail(`timed out waiting for ${what}`);
 };
 
-test('golden path: scripted call, PAY reply, confirmed trip page', async () => {
+test('golden path: scripted call, Daniel pays, confirmed trip page', async () => {
   store.reset({ log: false });
   const events = [];
   const onEvent = (ev) => events.push(ev);
@@ -43,14 +41,11 @@ test('golden path: scripted call, PAY reply, confirmed trip page', async () => {
     assert.match(held, /8,420/);
     assert.doesNotMatch(held, /K7Q2XM[\s\S]*show this card/i);
 
-    // A PAY from a stranger changes nothing; a PAY from Daniel's number on file pays.
-    const pay = (from) => fetch(`${base}/twilio/sms`, {
-      method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ From: from, Body: 'pay' }),
-    });
-    await pay('+85299999999');
+    // Without the admin key nothing changes; the operator's /dev/pay pays the held booking.
+    assert.equal((await fetch(`${base}/dev/pay`, { method: 'POST' })).status, 404);
     assert.equal(order.status, 'held');
-    await pay(store.members[0].delegates[0].phone);
+    const pay = await fetch(`${base}/dev/pay`, { method: 'POST', headers: admin });
+    assert.deepEqual(await pay.json(), { ok: true, ref: 'K7Q2XM' });
     assert.equal(order.status, 'paid');
     await until(() => events.some((e) => e.kind === 'cate_said' && /has paid/.test(e.text)), 'CATE saying Daniel paid');
 
