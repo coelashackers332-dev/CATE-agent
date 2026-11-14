@@ -66,11 +66,12 @@ const CSS = `
   :root {
     --paper: #ffffff; --ground: #eef3f2; --ink: #172524; --muted: #46595a; --line: #c9d6d4;
     --jade: #01484b; --jade-2: #00787a; --mint: #e4f2ef; --sun: #f5b83d; --sun-ink: #3d2a00;
+    --go: #01484b; --go-ink: #ffffff;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang HK", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --paper: #0f1d1d; --ground: #081414; --ink: #eef5f4; --muted: #a9bdbb; --line: #2b4443; --jade-2: #5cc3bd; --mint: #163332; }
+    :root { --paper: #0f1d1d; --ground: #081414; --ink: #eef5f4; --muted: #a9bdbb; --line: #2b4443; --jade-2: #5cc3bd; --mint: #163332; --go: #5cc3bd; --go-ink: #06201f; }
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
@@ -108,6 +109,9 @@ const CSS = `
   .status { display: flex; gap: 14px; align-items: flex-start; background: var(--mint); border-radius: 16px; padding: 16px; }
   .dot { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 22px; background: var(--sun); color: var(--sun-ink); }
   .status b { display: block; font-size: 24px; line-height: 1.2; margin-bottom: 4px; }
+  .pay { display: block; margin-top: 16px; background: var(--go); color: var(--go-ink); font-size: 26px; font-weight: 700; line-height: 1.3; text-align: center; text-decoration: none; padding: 18px 20px; border-radius: 14px; }
+  .pay:focus-visible { outline: 3px solid var(--sun); outline-offset: 3px; }
+  .paynote { margin-top: 10px; font-size: 17px; }
   .show { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
   .tag { position: relative; background: var(--jade); color: #fff; border-radius: 22px; padding: 46px 22px 0; }
   .tag::before { content: ""; position: absolute; top: 16px; left: 50%; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; background: var(--paper); }
@@ -166,9 +170,15 @@ function leg(dir, seg, fromCity) {
 </div>`;
 }
 
-function optionsState(page, order) {
+/** He pays himself when the order names no other payer. */
+const paysHimself = (o) => !o?.payer || String(o.payer).toLowerCase() === String(o.passenger ?? '').toLowerCase();
+
+function optionsState(page, order, payUrl) {
   const options = page.options ?? [];
   const held = order?.status === 'held' ? order : null;
+  // Only a web address, or a path on this site, can go behind the Pay button.
+  const payHref = held && /^(https?:\/\/|\/(?![/\\]))/i.test(payUrl ?? '') ? payUrl : null;
+  const other = held && !paysHimself(held) ? firstName(held.payer) : '';
   const city = tripCity(held ?? options[0]);
   const backs = new Set(options.map((o) => o.back?.dep));
   const sameBack = options.length > 0 && backs.size === 1 && options[0].back;
@@ -189,8 +199,10 @@ function optionsState(page, order) {
   const status = held ? `<div class="sec">
   <div class="status">
     <span class="dot" aria-hidden="true">…</span>
-    <p><b>Waiting for ${esc(firstName(held.payer) || 'payment')}${held.payer ? ' to pay' : ''}</b>Option ${esc(held.option_id)} is held under booking reference ${esc(held.ref)}. Open this link again after payment to see your booking. Nobody will ask you for card details.</p>
-  </div>
+    <p><b>${payHref ? 'Pay to confirm your booking' : `Waiting for ${other ? `${esc(other)} to pay` : 'payment'}`}</b>Option ${esc(held.option_id)} is held under booking reference ${esc(held.ref)}. ${payHref ? 'The button below opens the secure payment page.' : 'Open this link again after payment to see your booking. Nobody will ask you for card details.'}</p>
+  </div>${payHref ? `
+  <a class="pay" href="${esc(payHref)}">Pay ${esc(money(held.fare_hkd))}</a>
+  <p class="soft paynote">Test payment for this prototype. No real money moves.</p>` : ''}
 </div>` : '';
 
   const list = options.length
@@ -243,7 +255,7 @@ function confirmedState(order, profile) {
   const fact = (k, v) => (v ? `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>` : '');
   return shell(`Your ${city} trip`, `${top(
     `You're booked to ${city}`,
-    `${order.payer ? `${firstName(order.payer)} paid. ` : ''}Booking reference ${order.ref}.`,
+    `${paysHimself(order) ? 'Paid' : `${firstName(order.payer)} paid`}. Booking reference ${order.ref}.`,
   )}
 ${needsCard(order, profile)}
 <div class="sec">
@@ -282,13 +294,15 @@ ${footer(false)}`);
  * @param {object|null} a.order   the order for page.ref, if a hold exists
  * @param {object|null} a.profile member record or model-safe profile; only name and speech pace are read
  * @param {Date|number|string} [a.now]
+ * @param {string|null} [a.payUrl]  payment page for a traveller who pays himself. While the booking is
+ *                                  held, the page then shows one Pay button to it. The page still asks for nothing.
  */
-export function renderTripPage({ page, order = null, profile = null, now = Date.now() }) {
+export function renderTripPage({ page, order = null, profile = null, now = Date.now(), payUrl = null }) {
   if (!page) return notFoundPage();
   const expired = page.expires != null && new Date(now) > new Date(page.expires);
   if (expired || order?.status === 'ended') return endedState(order);
   if (order?.status === 'paid') return confirmedState(order, profile);
-  return optionsState(page, order);
+  return optionsState(page, order, payUrl);
 }
 
 /** The same page for `/`, unknown codes and anything else: it says nothing about any booking. */

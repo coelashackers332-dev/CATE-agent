@@ -58,6 +58,44 @@ test('held: still the options, with the held one marked', () => {
   assert.ok(html.includes('K7Q2XM'));
 });
 
+const withPay = (o, payUrl) => renderTripPage({ page, order: o, profile: member, now, payUrl });
+const self = { payer: 'Wong Tak Ming' };   // nobody else pays: the order names the traveller himself
+
+test('held with a pay link: one big Pay button to the payment page', () => {
+  const html = withPay(order(self), 'https://pay.example.com/c/cs_test_1?a=1&b=2');
+  assert.match(html, /Pay to confirm your booking/);
+  assert.ok(html.includes('href="https://pay.example.com/c/cs_test_1?a=1&amp;b=2"'));
+  assert.ok(html.includes('>Pay HKD 8,420</a>'));
+  assert.equal(html.split('<a ').length - 1, 1, 'exactly one link');
+  assert.ok(!html.includes('Waiting for'));
+  assert.ok(html.includes(SAFE), 'the page itself still never asks for card numbers');
+  assert.ok(!/<(form|button|input|script|link|img|iframe)\b/i.test(html));
+  assert.ok(withPay(order(self), '/pay/abc').includes('href="/pay/abc"'), 'a path on our own server works too');
+});
+
+test('the Pay button shows only while held, and only for a web link', () => {
+  const payUrl = 'https://pay.example.com/c/1';
+  const none = {
+    options: withPay(null, payUrl),
+    booked: withPay(order({ status: 'paid' }), payUrl),
+    ended: withPay(order({ status: 'ended' }), payUrl),
+    'held, no link': render(order()),
+    'held, script link': withPay(order(), 'javascript:alert(1)'),
+    'held, other-site trick': withPay(order(), '//evil.example.com/pay'),
+    'held, backslash trick': withPay(order(), '/\\evil.example.com/pay'),
+  };
+  for (const [name, html] of Object.entries(none)) {
+    assert.ok(!html.includes('<a ') && !html.includes('javascript:') && !html.includes('evil'), name);
+  }
+});
+
+test('paying himself: the page never says "Wong paid" or "Waiting for Wong"', () => {
+  assert.match(render(order(self)), /Waiting for payment/);
+  const paid = render(order({ ...self, status: 'paid' }));
+  assert.ok(paid.includes('Paid. Booking reference K7Q2XM.'));
+  assert.ok(!paid.includes('Wong paid'));
+});
+
 test('confirmed: reference, both flights, seat, meal, assistance, needs card', () => {
   const html = render(order({ status: 'paid' }));
   for (const t of ['booked to Vancouver', 'K7Q2XM', 'CX0V1', 'CX0V2', 'Friday 19 February', 'Wednesday 31 March', '13:30',
