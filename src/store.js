@@ -34,11 +34,12 @@ export const store = {
   },
 };
 
-// Real phone numbers live only in .env, never in git.
+// Real phone numbers and email addresses live only in .env, never in git.
 function applyEnvOverrides(members) {
   const wong = members.find((m) => m.member_id === 'DEMO-0001');
   if (!wong) return;
   if (config.demoCallerNumber) wong.phone = config.demoCallerNumber;
+  if (config.demoCallerEmail) wong.email = config.demoCallerEmail;
   const daniel = wong.delegates?.[0];
   if (daniel && config.danielPhone) daniel.phone = config.danielPhone;
   if (daniel && config.danielEmail) daniel.email = config.danielEmail;

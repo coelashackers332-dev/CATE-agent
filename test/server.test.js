@@ -12,7 +12,7 @@ import { createMessages } from '../src/messages.js';
 import { decode, encode } from '../src/mulaw.js';
 
 // Fixed test settings, whatever a local .env says: placeholder numbers only, no real ones.
-Object.assign(config, { baseUrl: 'https://cate.test', adminSecret: 'test-admin', demoCallerNumber: '', danielPhone: '', danielEmail: '' });
+Object.assign(config, { baseUrl: 'https://cate.test', adminSecret: 'test-admin', demoCallerNumber: '', demoCallerEmail: '', danielPhone: '', danielEmail: '' });
 const AUTH = 'test-auth-token';
 const WONG = '+85200000001';
 const DANIEL = '+85200000002';
