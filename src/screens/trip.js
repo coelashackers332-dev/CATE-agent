@@ -60,73 +60,110 @@ function passengerName(order, profile) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The whole look is this one block. To switch to design/pages/trip-page-glass.html or
-// trip-page-simple.html, replace this string and keep the class names.
+// The whole look is this one block: liquid glass for the frames, never for the words. Every line of text
+// sits on a near-white (or near-black) pane at high contrast; the needs card stays solid for airport staff.
+// Without blur support, or when the phone asks for less transparency or more contrast, the panes go solid.
 // ---------------------------------------------------------------------------------------------
 const CSS = `
   :root {
-    --paper: #ffffff; --ground: #eef3f2; --ink: #172524; --muted: #46595a; --line: #c9d6d4;
-    --jade: #01484b; --jade-2: #00787a; --mint: #e4f2ef; --sun: #f5b83d; --sun-ink: #3d2a00;
+    --ink: #142221; --muted: #3f5352; --line: rgba(1, 72, 75, .16);
+    --jade: #01484b; --jade-2: #00787a; --mint: rgba(220, 240, 236, .9); --sun: #f5b83d; --sun-ink: #3d2a00;
     --go: #01484b; --go-ink: #ffffff;
+    --glass: rgba(255, 255, 255, .78); --glass-edge: rgba(255, 255, 255, .85); --shine: rgba(255, 255, 255, .95);
+    --shade: 0 10px 30px rgba(1, 60, 62, .12), 0 1px 2px rgba(1, 60, 62, .08);
+    --sky: radial-gradient(60% 45% at 0% 0%, rgba(0, 120, 122, .30), transparent 70%),
+           radial-gradient(55% 40% at 100% 35%, rgba(245, 184, 61, .28), transparent 70%),
+           radial-gradient(70% 50% at 20% 100%, rgba(92, 195, 189, .30), transparent 70%), #e7f1ef;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, "PingFang HK", "Microsoft JhengHei", "Noto Sans TC", sans-serif;
     color-scheme: light dark;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --paper: #0f1d1d; --ground: #081414; --ink: #eef5f4; --muted: #a9bdbb; --line: #2b4443; --jade-2: #5cc3bd; --mint: #163332; --go: #5cc3bd; --go-ink: #06201f; }
+    :root {
+      --ink: #eef5f4; --muted: #b3c6c4; --line: rgba(255, 255, 255, .14); --jade-2: #6fd0c9; --mint: rgba(22, 51, 50, .92);
+      --go: #6fd0c9; --go-ink: #04201f;
+      --glass: rgba(14, 30, 30, .74); --glass-edge: rgba(255, 255, 255, .14); --shine: rgba(255, 255, 255, .10);
+      --shade: 0 10px 30px rgba(0, 0, 0, .45);
+      --sky: radial-gradient(60% 45% at 0% 0%, rgba(0, 120, 122, .45), transparent 70%),
+             radial-gradient(55% 40% at 100% 35%, rgba(245, 184, 61, .16), transparent 70%), #061111;
+    }
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
-  body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--sans); font-size: 20px; line-height: 1.45; }
+  body { margin: 0; min-height: 100vh; background: transparent; color: var(--ink); font-family: var(--sans); font-size: 20px; line-height: 1.45; }
+  body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--sky); }
   p, h1, h2, ol, dl, dd { margin: 0; }
-  .page { max-width: 30rem; margin: 0 auto 40px; background: var(--paper); }
-  @media (min-width: 560px) { .page { margin-top: 16px; border-radius: 24px; border: 1px solid var(--line); overflow: hidden; } }
-  .top { background: var(--jade); color: #fff; padding: 18px 20px 22px; }
+  .page { max-width: 30rem; margin: 0 auto; padding: 12px 12px 32px; display: grid; gap: 14px; }
+
+  /* The panes */
+  .top, .sec, .safe { border-radius: 28px; box-shadow: var(--shade), inset 0 1px 0 var(--shine); border: 1px solid var(--glass-edge); }
+  .sec, .safe { background: var(--glass); -webkit-backdrop-filter: blur(22px) saturate(170%); backdrop-filter: blur(22px) saturate(170%); }
+  .top { background: linear-gradient(180deg, rgba(255, 255, 255, .14), transparent 55%), var(--jade); color: #fff; padding: 20px 22px 24px; border-color: rgba(255, 255, 255, .25); }
   .brand { font-size: 17px; margin-bottom: 14px; color: #d9ecea; }
   .brand b { color: #fff; }
   .top h1 { font-size: 32px; line-height: 1.15; font-weight: 700; text-wrap: balance; }
-  .top .lede { margin-top: 8px; font-size: 20px; color: #d9ecea; }
+  .top .lede { margin-top: 8px; font-size: 20px; color: #e3f2f0; }
   .sec { padding: 22px 20px; }
-  .sec + .sec { border-top: 1px solid var(--line); }
-  h2 { font-size: 24px; line-height: 1.2; margin-bottom: 12px; }
+  h2 { font-size: 24px; line-height: 1.2; margin-bottom: 14px; }
   .soft { color: var(--muted); }
+
+  /* Flight options */
   .opts { list-style: none; padding: 0; display: grid; gap: 12px; }
-  .opt { display: grid; grid-template-columns: 56px 1fr; gap: 0 14px; padding: 14px 16px 14px 12px; border: 2px solid var(--line); border-radius: 16px; }
+  .opt { display: grid; grid-template-columns: 56px 1fr; gap: 0 14px; padding: 16px 16px 16px 12px; border: 2px solid var(--line); border-radius: 20px; background: rgba(255, 255, 255, .55); }
+  @media (prefers-color-scheme: dark) { .opt { background: rgba(255, 255, 255, .04); } }
   .opt > :not(.n) { grid-column: 2; min-width: 0; }
   .opt .n { grid-row: 1 / span 6; font-size: 44px; line-height: 1; font-weight: 700; color: var(--jade-2); text-align: center; padding-top: 2px; }
   .opt .when { font-size: 24px; font-weight: 700; }
   .opt .time { font-size: 32px; line-height: 1.15; font-weight: 700; font-variant-numeric: tabular-nums; }
   .opt .fare { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .opt.held { border-color: var(--jade-2); background: var(--mint); }
-  .flag { display: inline-block; margin: 6px 0 2px; background: var(--sun); color: var(--sun-ink); font-weight: 700; font-size: 17px; padding: 2px 10px; border-radius: 6px; }
+  .opt.held { border: 3px solid var(--jade-2); background: var(--mint); }
+  .flag { display: inline-block; margin: 6px 0 2px; background: var(--sun); color: var(--sun-ink); font-weight: 700; font-size: 17px; padding: 3px 12px; border-radius: 99px; }
   .say { margin-top: 16px; font-size: 22px; }
+
+  /* Booked */
   .leg { display: grid; grid-template-columns: auto 1fr; gap: 2px 14px; align-items: baseline; }
-  .leg + .leg { margin-top: 18px; }
+  .leg + .leg { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--line); }
   .leg .dir { font-size: 17px; color: var(--muted); grid-column: 1 / -1; }
   .leg .day { font-size: 24px; font-weight: 700; grid-column: 1 / -1; }
   .leg .t { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
-  .facts { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; }
+  .facts { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; }
   .facts dt { color: var(--muted); }
   .facts dd { font-weight: 700; overflow-wrap: anywhere; }
-  .status { display: flex; gap: 14px; align-items: flex-start; background: var(--mint); border-radius: 16px; padding: 16px; }
+
+  /* Waiting, and the Pay button */
+  .status { display: flex; gap: 14px; align-items: flex-start; background: var(--mint); border-radius: 20px; padding: 16px; }
   .dot { flex: none; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 22px; background: var(--sun); color: var(--sun-ink); }
   .status b { display: block; font-size: 24px; line-height: 1.2; margin-bottom: 4px; }
-  .pay { display: block; margin-top: 16px; background: var(--go); color: var(--go-ink); font-size: 26px; font-weight: 700; line-height: 1.3; text-align: center; text-decoration: none; padding: 18px 20px; border-radius: 14px; }
-  .pay:focus-visible { outline: 3px solid var(--sun); outline-offset: 3px; }
-  .paynote { margin-top: 10px; font-size: 17px; }
+  .pay { display: block; margin-top: 18px; min-height: 68px; background: linear-gradient(180deg, rgba(255, 255, 255, .18), transparent 60%), var(--go); color: var(--go-ink); font-size: 26px; font-weight: 700; line-height: 1.3; text-align: center; text-decoration: none; padding: 18px 20px; border-radius: 99px; box-shadow: 0 8px 22px rgba(1, 72, 75, .30), inset 0 1px 0 rgba(255, 255, 255, .35); }
+  .pay:active { transform: scale(.98); }
+  .pay:focus-visible { outline: 4px solid var(--sun); outline-offset: 4px; }
+  .paynote { margin-top: 10px; font-size: 17px; text-align: center; }
+
+  /* Needs card: solid, for staff at a counter */
   .show { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
-  .tag { position: relative; background: var(--jade); color: #fff; border-radius: 22px; padding: 46px 22px 0; }
-  .tag::before { content: ""; position: absolute; top: 16px; left: 50%; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; background: var(--paper); }
-  .need + .need { margin-top: 18px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.22); }
+  .tag { position: relative; background: linear-gradient(180deg, rgba(255, 255, 255, .12), transparent 40%), var(--jade); color: #fff; border-radius: 24px; padding: 46px 22px 0; box-shadow: 0 12px 28px rgba(1, 72, 75, .28); }
+  .tag::before { content: ""; position: absolute; top: 16px; left: 50%; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; background: #e7f1ef; box-shadow: inset 0 2px 3px rgba(0, 0, 0, .25); }
+  .need + .need { margin-top: 18px; padding-top: 18px; border-top: 1px solid rgba(255, 255, 255, .22); }
   .need .en { font-size: 26px; line-height: 1.25; font-weight: 700; }
   .need .more { font-size: 22px; margin-top: 4px; color: #d9ecea; }
-  .stub { margin: 24px -22px 0; padding: 18px 22px 20px; border-top: 3px dashed rgba(255,255,255,.45); display: grid; grid-template-columns: auto 1fr; gap: 4px 18px; align-items: center; }
-  .code { grid-row: span 3; background: var(--sun); color: var(--sun-ink); font-size: 32px; font-weight: 800; letter-spacing: .04em; padding: 10px 14px; border-radius: 10px; line-height: 1.1; text-align: center; }
+  .stub { margin: 24px -22px 0; padding: 18px 22px 20px; border-top: 3px dashed rgba(255, 255, 255, .45); display: grid; grid-template-columns: auto 1fr; gap: 4px 18px; align-items: center; }
+  .code { grid-row: span 3; background: var(--sun); color: var(--sun-ink); font-size: 32px; font-weight: 800; letter-spacing: .04em; padding: 10px 14px; border-radius: 12px; line-height: 1.1; text-align: center; }
   .stub .k { display: block; font-size: 15px; color: #bcdcd8; }
   .stub .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
   .ended p + p { margin-top: 12px; }
-  .safe { padding: 18px 20px 24px; background: var(--ground); font-size: 17px; color: var(--muted); }
+  .safe { padding: 18px 20px 22px; font-size: 17px; color: var(--muted); }
   .safe b { color: var(--ink); }
   .safe p + p { margin-top: 8px; }
+
+  /* Solid panes when glass would cost clarity */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) { :root { --glass: rgba(255, 255, 255, .96); } }
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    .sec, .safe, .opt { background: #fff; -webkit-backdrop-filter: none; backdrop-filter: none; }
+    .opt { border-color: #5d7170; }
+  }
+  @media (prefers-color-scheme: dark) and ((prefers-reduced-transparency: reduce) or (prefers-contrast: more)) {
+    .sec, .safe, .opt { background: #0f1d1d; }
+  }
 `;
 
 const SAFE = '<b>This link only shows your trip.</b> Cathay never asks for passwords or card numbers here.';
