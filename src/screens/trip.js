@@ -1,6 +1,7 @@
 // The view-only trip page (GET /v/:code). Rendered on every open from the booking's current state:
 // options (none chosen yet, or held) -> confirmed + needs card (paid) -> ended.
-// It only shows. No forms, no scripts, nothing loaded from other sites.
+// It only shows. No forms, nothing loaded from other sites. A held booking can carry one Pay link, and
+// while the booking can still change, one small script re-reads this same page so it follows the call.
 // It prints name, flights and needs only: never phone, email, member number or passport.
 
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -130,9 +131,30 @@ const CSS = `
 
 const SAFE = '<b>This link only shows your trip.</b> Cathay never asks for passwords or card numbers here.';
 
-function shell(title, body) {
+/** A short fingerprint of what a page shows, so an open page can tell when the booking has changed. */
+function version(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+// Pages that can still change keep themselves in step with the call: when the version on the server
+// differs, the page reloads. It reads its own address only; nothing is sent or loaded from elsewhere.
+// shortcut: re-reads the whole page every 3 seconds, fine during a call; give it a small version route if pages stay open for hours.
+const LIVE = `
+<script>
+setInterval(async () => {
+  try {
+    const r = await fetch(location.href, { cache: 'no-store' });
+    const v = /<html[^>]* data-v="([^"]*)"/.exec(await r.text());
+    if (r.ok && (v ? v[1] : '') !== document.documentElement.dataset.v) { scrollTo(0, 0); location.reload(); }
+  } catch {}
+}, 3000);
+</script>`;
+
+function shell(title, body, live = false) {
   return `<!doctype html>
-<html lang="en">
+<html lang="en"${live ? ` data-v="${version(body)}"` : ''}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -144,7 +166,7 @@ function shell(title, body) {
 <body>
 <main class="page">
 ${body}
-</main>
+</main>${live ? LIVE : ''}
 </body>
 </html>`;
 }
@@ -179,6 +201,10 @@ function optionsState(page, order, payUrl) {
   // Only a web address, or a path on this site, can go behind the Pay button.
   const payHref = held && /^(https?:\/\/|\/(?![/\\]))/i.test(payUrl ?? '') ? payUrl : null;
   const other = held && !paysHimself(held) ? firstName(held.payer) : '';
+  // Paying by button and paying through the call stay open together: nobody is asked to choose first.
+  const how = payHref
+    ? (other ? 'You can also pay yourself with the button below.' : 'The button below opens the secure payment page.')
+    : 'This page will show your booking as soon as it is paid. Nobody will ask you for card details.';
   const city = tripCity(held ?? options[0]);
   const backs = new Set(options.map((o) => o.back?.dep));
   const sameBack = options.length > 0 && backs.size === 1 && options[0].back;
@@ -199,7 +225,7 @@ function optionsState(page, order, payUrl) {
   const status = held ? `<div class="sec">
   <div class="status">
     <span class="dot" aria-hidden="true">…</span>
-    <p><b>${payHref ? 'Pay to confirm your booking' : `Waiting for ${other ? `${esc(other)} to pay` : 'payment'}`}</b>Option ${esc(held.option_id)} is held under booking reference ${esc(held.ref)}. ${payHref ? 'The button below opens the secure payment page.' : 'Open this link again after payment to see your booking. Nobody will ask you for card details.'}</p>
+    <p><b>${other ? `Waiting for ${esc(other)} to pay` : payHref ? 'Pay to confirm your booking' : 'Waiting for payment'}</b>Option ${esc(held.option_id)} is held under booking reference ${esc(held.ref)}. ${how}</p>
   </div>${payHref ? `
   <a class="pay" href="${esc(payHref)}">Pay ${esc(money(held.fare_hkd))}</a>
   <p class="soft paynote">Test payment for this prototype. No real money moves.</p>` : ''}
@@ -225,7 +251,7 @@ ${list}
   ${back}
   <p class="soft">Prices are for the return trip, per person. Illustrative fares. Times are local at each airport.</p>
 </div>
-${footer(false)}`);
+${footer(false)}`, true);
 }
 
 function needsCard(order, profile) {

@@ -69,8 +69,39 @@ test('held with a pay link: one big Pay button to the payment page', () => {
   assert.equal(html.split('<a ').length - 1, 1, 'exactly one link');
   assert.ok(!html.includes('Waiting for'));
   assert.ok(html.includes(SAFE), 'the page itself still never asks for card numbers');
-  assert.ok(!/<(form|button|input|script|link|img|iframe)\b/i.test(html));
+  assert.ok(!/<(form|button|input|link|img|iframe)\b/i.test(html));
   assert.ok(withPay(order(self), '/pay/abc').includes('href="/pay/abc"'), 'a path on our own server works too');
+});
+
+test('held, someone else asked to pay, with a pay link: both ways stay open', () => {
+  const html = withPay(order(), 'https://pay.example.com/c/1');   // payer: Daniel Wong
+  assert.match(html, /Waiting for Daniel to pay/);
+  assert.match(html, /You can also pay yourself/);
+  assert.ok(html.includes('>Pay HKD 8,420</a>'));
+});
+
+// What an open page compares to know the booking has changed.
+const version = (html) => /<html[^>]* data-v="([^"]*)"/.exec(html)?.[1];
+
+test('pages that can still change keep themselves up to date; finished pages stay still', () => {
+  const live = { options: render(null), held: render(order()), 'held with pay': withPay(order(self), '/pay/abc') };
+  for (const [name, html] of Object.entries(live)) {
+    assert.equal(html.split('<script').length - 1, 1, `${name}: one script`);
+    assert.ok(!/<script[^>]+src=/i.test(html), `${name}: the script is inline, nothing is loaded`);
+    assert.ok(html.includes('location.reload()') && html.includes('fetch(location.href'), `${name}: re-reads its own address only`);
+    assert.ok(version(html), `${name}: carries a version`);
+  }
+  const { confirmed, ended, expired, notFound } = allPages();
+  for (const [name, html] of Object.entries({ confirmed, ended, expired, notFound })) {
+    assert.ok(!html.includes('<script'), `${name}: no script`);
+  }
+});
+
+test('the version changes when the booking changes, and only then', () => {
+  assert.equal(version(render(null)), version(render(null)));
+  assert.equal(version(render(order())), version(render(order())));
+  const seen = [render(null), render(order()), render(order({ option_id: '2' })), withPay(order(), '/pay/abc'), withPay(order(self), '/pay/abc')].map(version);
+  assert.equal(new Set(seen).size, seen.length, `each state has its own version: ${seen.join(' ')}`);
 });
 
 test('the Pay button shows only while held, and only for a web link', () => {
@@ -139,7 +170,7 @@ test('every page: view only, zoomable, not indexed, nothing loaded from elsewher
     assert.ok(html.startsWith('<!doctype html>'), name);
     assert.ok(html.includes('<meta name="robots" content="noindex">'), name);
     assert.ok(!/maximum-scale|user-scalable/.test(html), name);
-    assert.ok(!/<(form|button|input|script|link|img|iframe)\b/i.test(html), name);
+    assert.ok(!/<(form|button|input|link|img|iframe)\b/i.test(html), name);
     assert.ok(!/https?:\/\//.test(html), name);
   }
 });
@@ -155,7 +186,7 @@ test('values are HTML-escaped', () => {
     renderTripPage({ page, order: order({ status: 'paid', passenger: '' }), profile: { name: evil }, now }),
   ];
   for (const html of pages) {
-    assert.ok(!html.includes('<script'), 'raw tag in page');
+    assert.ok(!html.includes('<script>alert'), 'raw tag in page');
     assert.ok(html.includes('&lt;script&gt;'));
   }
 });
