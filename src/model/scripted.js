@@ -40,17 +40,19 @@ export function startSession({ call, runTool, emit }) {
       () => hear('Yes, please.'),
       async () => { await tool('text_options'); say("I'm texting you now. Which one would you like?"); },
       () => hear('The first one.'),
+      async () => { say((await tool('choose_option', { option_id: call.scriptChoice })).confirm); await tool('set_preferences', { seat_ok: true, meal_ok: true }); },
       () => say('Wheelchair to the gate, like your Osaka trip?'),
       () => hear('Yes, please.'),
       async () => { const a = await tool('set_assistance', { same_as_last_trip: true }); say(a.summary); },
+      async () => { say((await tool('set_payer', { payer: 'family' })).confirm); },
       async () => {
-        const first = await tool('hold_booking', { option_id: call.scriptChoice });
+        const first = await tool('hold_booking', {});
         for (const line of lines(first.readback)) say(line);
         say('Is that right?');
       },
       () => hear('Yes.'),
       async () => {
-        const held = await tool('hold_booking', { option_id: call.scriptChoice, caller_confirmed: true });
+        const held = await tool('hold_booking', { caller_confirmed: true });
         say(`Your booking is held. Your reference is ${held.ref_spoken}.`);
       },
       async () => {

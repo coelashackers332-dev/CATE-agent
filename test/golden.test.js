@@ -62,7 +62,7 @@ test('golden path: scripted call, PAY reply, confirmed trip page', async () => {
     // Tools ran in the order the rules require.
     const tools = events.filter((e) => e.kind === 'tool_call').map((e) => e.name);
     assert.deepEqual(tools, ['verify_caller', 'apply_profile', 'find_flights', 'text_options',
-      'set_assistance', 'hold_booking', 'hold_booking', 'send_pay_link']);
+      'choose_option', 'set_preferences', 'set_assistance', 'set_payer', 'hold_booking', 'hold_booking', 'send_pay_link']);
     // No phone number or email address ever reaches the projector.
     const feed = JSON.stringify(events);
     assert.doesNotMatch(feed, /\+852\d{8}/);
