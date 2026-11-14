@@ -132,10 +132,11 @@ export function payEmail({ order, travellerName, payerName, payUrl }) → { subj
 // src/screens/trip.js
 export function renderTripPage({ page, order, profile, now }) → string   // full HTML; states: options | confirmed (+ needs card) | ended
 export function notFoundPage() → string
-// src/screens/pay.js  (the pay page; Harell's screen, design with Cavell)
+// src/screens/pay.js  (the pay page; Harell's screen, in Cavell's design)
 export const METHODS → [{ id, label, note? }]        // card, Apple Pay, Google Pay, FPS, PayMe, AlipayHK, Octopus
-export function renderPayPage({ order, code, nonce, error }) → string   // held: trip, amount, methods, one Pay button
-export function renderPaidPage({ order, code, nonce }) → string         // paid: receipt + link to /v/:code
+export const BACK_AFTER_S = 3
+export function renderPayPage({ order, code, nonce, error }) → string   // held: only the ways to pay and one Pay button (with the amount)
+export function renderPaidPage({ order, code, nonce }) → string         // paid: "Payment successful", back to /v/:code after BACK_AFTER_S s (and a button)
 // src/payment.js  (server side)
 export function onPaid(ref, source) → void   // idempotent: setOrderStatus(ref,'paid'), order.paid_with = source, notify the live session, then text 2
 payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
@@ -147,7 +148,7 @@ payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
 |---|---|---|
 | `WS /local/stream` | the audio bridge on the team laptop (the `/bridge` page) | local only (no `X-Forwarded-For`) + admin secret (`?key=`); one call at a time |
 | `GET /v/:code` | Mr Wong, Daniel | random code; read-only; headers `X-Robots-Tag: noindex`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` |
-| `GET /pay/:code`, `POST /pay/:code` | the payer: Mr Wong (Pay button on his trip page) or Daniel (pay email) | the trip page's random code; only while the booking is held (after payment, GET shows the receipt); POST takes one field `method` from `METHODS`, body ≤ 2 KB, then 303 back to GET; no card or personal fields; headers as `/v/` plus a nonce CSP and `X-Frame-Options: DENY` |
+| `GET /pay/:code`, `POST /pay/:code` | the payer: Mr Wong (Pay button on his trip page) or Daniel (pay email) | the trip page's random code; only while the booking is held (after payment, GET shows "Payment successful" and goes back to `/v/:code`); POST takes one field `method` from `METHODS`, body ≤ 2 KB, then 303 back to GET; no card or personal fields; headers as `/v/` plus a nonce CSP and `X-Frame-Options: DENY` |
 | `GET /projector` + `WS /events` | team laptop | admin secret (`?key=`) |
 | `GET /bridge` | team laptop: the audio bridge page (`screens/bridge.html`). The call is answered on the laptop (Phone Link, audio through virtual cables) and the page connects it to `WS /local/stream` | this machine only + admin secret (`?key=`) |
 | `POST /reset`, `POST /dev/simulate`, `POST /dev/pay` | team laptop | admin secret (`x-admin-key` header) |

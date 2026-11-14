@@ -167,7 +167,8 @@ test('texts by email: each text goes to the address on file for that number, its
   assert.deepEqual(rcpts(), [`RCPT TO:<${wong().email}>`]);
   const { headers, parts } = parse(seen.message);
   assert.equal(headers.subject, 'Cathay CATE: booked. Ref K7Q2XM, WONG TAK MING.');
-  assert.deepEqual(parts, [{ type: 'text/plain', text }], 'the same words as the text, nothing added');
+  assert.deepEqual(parts.map((p) => p.type), ['text/plain', 'text/html']);
+  assert.equal(parts[0].text, text, 'the plain part: the same words as the text, nothing added');
 
   await live({}, 'email').sendSms(daniel.phone, 'Cathay CATE: Wong Tak Ming asks you to pay for a flight.');
   assert.equal(rcpts().at(-1), `RCPT TO:<${daniel.email}>`, "the family payer's own address");
@@ -175,6 +176,17 @@ test('texts by email: each text goes to the address on file for that number, its
   const told = events.filter((e) => e.system === 'Messages').map((e) => [e.action, e.ok, e.summary]);
   assert.deepEqual(told, [['send_sms', true, '✓ text sent by email'], ['send_sms', true, '✓ text sent by email']]);
   assert.doesNotMatch(JSON.stringify(events), /@|\+\d{8}/, 'no address or number reaches the projector');
+});
+
+test('texts by email: the laid-out part has the same words, each link as a big button, and nothing from the text as HTML', async () => {
+  const text = 'Cathay CATE: your Vancouver flights\n1) Fri 19 Feb 11:40, HKD 8420\n\nBack Wed 31 Mar. Big-text view: https://cate.test/v/abc\n<b>not bold</b> & "co"';
+  await live({}, 'email').sendSms(wong().phone, text);
+  const html = parse(seen.message).parts[1].text;
+  assert.match(html, /<h1 [^>]*>Your Vancouver flights<\/h1>/, 'the first line is the heading');
+  assert.match(html, /<p [^>]*>1\) Fri 19 Feb 11:40, HKD 8420<\/p>/);
+  assert.match(html, /<p [^>]*>Back Wed 31 Mar\. Big-text view:<\/p>\s*<p [^>]*><a href="https:\/\/cate\.test\/v\/abc" [^>]*>Open your trip<\/a><\/p>/);
+  assert.match(html, /&lt;b&gt;not bold&lt;\/b&gt; &amp; &quot;co&quot;/);
+  assert.doesNotMatch(html, /<b>not bold|<p [^>]*><\/p>/, 'no HTML from the text, and no empty paragraphs');
 });
 
 test('texts by email: a number on file written with spaces, as people type it in .env, still finds its address', async () => {

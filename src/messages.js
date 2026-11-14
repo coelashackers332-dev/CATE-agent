@@ -51,6 +51,38 @@ function headerText(value) {
   return /^[\x20-\x7E]*$/.test(line) ? line : `=?UTF-8?B?${b64(line)}?=`;
 }
 
+const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+/** A web link in a text, without the full stop or bracket that may follow it. */
+const LINK = /(https?:\/\/[^\s<>"]*[^\s<>".,;:!?)])/;
+
+/**
+ * TEXTS=email: a text as an email that reads well on a phone. The words are exactly the text's: its first line is
+ * the heading (and the subject), each other line a paragraph, and each web link a big button. Inline styles only,
+ * because mail apps drop style sheets; the look is Cavell's for emails: white, a jade brand line, 20 px text,
+ * the button in #2c4036.
+ */
+function textAsEmail(body) {
+  const [first = '', ...rest] = String(body).split('\n');
+  const heading = first.replace(/^Cathay CATE:\s*/i, '');
+  const para = (s) => `<p style="margin:0 0 14px;font-size:20px;line-height:1.45;color:#1f2a2a;">${escHtml(s)}</p>`;
+  const button = (url) => {
+    const label = /\/pay\//.test(url) ? 'Open the payment page' : /\/v\//.test(url) ? 'Open your trip' : 'Open the link';
+    return `<p style="margin:6px 0 20px;"><a href="${escHtml(url)}" style="display:block;background:#2c4036;color:#ffffff;font-size:22px;`
+      + `font-weight:bold;line-height:1.3;text-align:center;text-decoration:none;padding:16px 20px;border-radius:12px;">${label}</a></p>`;
+  };
+  // split() with a captured pattern keeps each link at an odd index, between the words around it.
+  const lines = rest.map((line) => line.split(LINK).map((part, i) => (i % 2 ? button(part) : part.trim() ? para(part.trim()) : '')).join(''));
+  return `<!doctype html>
+<html lang="en"><body style="margin:0;padding:0;background:#ffffff;">
+<div style="max-width:560px;margin:0 auto;padding:24px 20px;font-family:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2a2a;">
+<p style="margin:0 0 20px;padding-bottom:10px;border-bottom:4px solid #005d63;font-size:16px;color:#005d63;"><b>Cathay</b> CATE</p>
+<h1 style="margin:0 0 16px;font-size:28px;line-height:1.2;color:#1f2a2a;">${escHtml(heading.charAt(0).toUpperCase() + heading.slice(1))}</h1>
+${lines.filter(Boolean).join('\n')}
+<p style="margin:24px 0 0;font-size:16px;line-height:1.4;color:#4f5c5c;">CATE prototype: this is a text message, sent by email.</p>
+</div>
+</body></html>`;
+}
+
 /**
  * One email over SMTP, encrypted from the first byte (port 465). Resolves once the mail server has accepted it.
  * ponytail: just enough SMTP for one message to one address through Gmail, so no mail package is needed.
@@ -137,8 +169,8 @@ export function createMessages({ mode = config.messages, email = emailFromEnv(),
       try {
         if (texts === 'email') {
           if (!inbox) throw new Error('no email address on file for that number');
-          // The same words as the text; its first line ("Cathay CATE: booked. Ref ...") is the subject.
-          await mail(inbox, String(body).split('\n')[0], null, body);
+          // The same words as the text, plain and laid out; its first line ("Cathay CATE: booked. Ref ...") is the subject.
+          await mail(inbox, String(body).split('\n')[0], textAsEmail(body), body);
         } else {
           throw new Error('there is no SMS sender: set TEXTS=email');
         }

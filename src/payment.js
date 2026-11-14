@@ -84,8 +84,9 @@ export function createPayment({ messages, texts, baseUrl }) {
 
   /**
    * /pay/<code>, the one pay link (the Pay button on the trip page, and the pay email). GET: the pay page while the
-   * booking is held, the receipt once it's paid. POST method=<id>: pays, then redirects back to GET, so a reload
-   * can't pay twice. An unknown or expired code, a booking that isn't held or paid, or another HTTP method: notFound().
+   * booking is held; once it's paid, "Payment successful", which goes back to the trip page by itself. POST method=<id>:
+   * pays, then redirects back to GET, so a reload can't pay twice. An unknown or expired code, a booking that isn't
+   * held or paid, or another HTTP method: notFound().
    */
   async function payRoute(req, res, code, notFound) {
     const order = bookingFor(code);
