@@ -317,3 +317,58 @@ test('traveller emails: inline styles only, text of 20 px or more, escaped, noth
     assert.ok(!tripEmail({ options, link: bad, travellerName: 'Wong Tak Ming' }).html.includes('<a '), `${bad} must not become a button`);
   }
 });
+
+// While his call is live, the page also takes the caller's answers by button: the same answers he can say aloud.
+const liveRender = (live, o = null) => renderTripPage({ page, order: o, profile: member, now, live });
+const buttons = (html) => [...html.matchAll(/<button[^>]*name="(\w+)" value="([^"]*)"[^>]*>([^<]*)<\/button>/g)].map((m) => `${m[1]}=${m[2]}|${m[3]}`);
+
+test('answers by button, nothing chosen yet: each flight has its own Choose button, posting to the page itself', () => {
+  const html = liveRender({ choice: null, payer: null, family: 'Daniel' });
+  assert.deepEqual(buttons(html), ['option=1|Choose flight 1', 'option=2|Choose flight 2', 'option=3|Choose flight 3']);
+  assert.match(html, /<form method="post">/, 'no action: the answer goes to this page\'s own address');
+  assert.ok(html.includes('Tap a flight, or say its number on the call.'));
+  assert.ok(!html.includes('Who pays?'), 'one question at a time');
+  assert.ok(html.includes(SAFE));
+  assert.ok(!/<(input|select|textarea|link|img|iframe)\b/i.test(html), 'buttons only: nothing to type');
+});
+
+test('answers by button, a flight chosen: it is marked, the others offer a change, and the page asks who pays', () => {
+  const html = liveRender({ choice: '2', payer: null, family: 'Daniel' });
+  assert.match(html, /You chose flight 2/);
+  assert.match(html, /Nothing is booked until you say yes/);
+  const chosen = html.split('<li').find((li) => li.includes('Your choice'));
+  assert.ok(chosen.includes('23:50') && !chosen.includes('<button'), 'the mark sits on flight 2, which needs no button');
+  assert.equal(html.split('Your choice').length - 1, 1);
+  assert.deepEqual(buttons(html), ['payer=self|I pay myself', 'payer=family|Ask Daniel to pay', 'option=1|Change to flight 1', 'option=3|Change to flight 3']);
+  assert.ok(html.indexOf('Who pays?') < html.indexOf('Change to flight 1'), 'the open question comes first');
+});
+
+test('answers by button, payer chosen: the page says who pays and offers the other way', () => {
+  const family = liveRender({ choice: '1', payer: 'family', family: 'Daniel' });
+  assert.match(family, /Daniel will be asked to pay/);
+  assert.ok(buttons(family).includes('payer=self|I pay myself instead'));
+  assert.ok(!buttons(family).some((b) => b.startsWith('payer=family')));
+  const self = liveRender({ choice: '1', payer: 'self', family: 'Daniel' });
+  assert.match(self, /You pay yourself/);
+  assert.ok(buttons(self).includes('payer=family|Ask Daniel to pay instead'));
+});
+
+test('answers by button: with no family payer on file the page does not ask who pays', () => {
+  const html = liveRender({ choice: '1', payer: null, family: '' });
+  assert.ok(!html.includes('Who pays?') && !buttons(html).some((b) => b.startsWith('payer=')));
+  assert.match(html, /You chose flight 1/);
+});
+
+test('answers by button: only before the hold; names and ids are escaped; each answer changes the version', () => {
+  const live = { choice: '1', payer: 'self', family: 'Daniel' };
+  for (const o of [order(), order({ status: 'paid' }), order({ status: 'ended' })]) {
+    assert.ok(!/<(form|button)\b/i.test(liveRender(live, o)), `${o.status}: no buttons`);
+  }
+  const bad = '"><script>alert(1)</script>';
+  const odd = (choice) => renderTripPage({ page: { ...page, options: [{ ...options[0], id: bad }, options[1]] }, profile: member, now, live: { choice, payer: null, family: '<b>x' } });
+  for (const html of [odd(null), odd(bad), odd('2')]) assert.ok(!html.includes('<script>alert') && !html.includes('<b>x'));
+  assert.ok(odd(bad).includes('Ask &lt;b&gt;x to pay'), 'the who-pays question is there, escaped');
+  const seen = [null, '1', '2'].map((choice) => version(liveRender({ choice, payer: null, family: 'Daniel' })));
+  seen.push(version(liveRender({ choice: '2', payer: 'self', family: 'Daniel' })), version(render(null)));
+  assert.equal(new Set(seen).size, seen.length, `each state has its own version: ${seen.join(' ')}`);
+});

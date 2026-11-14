@@ -1,7 +1,9 @@
-// The view-only trip page (GET /v/:code). Rendered on every open from the booking's current state:
+// The trip page (GET /v/:code). Rendered on every open from the booking's current state:
 // options (none chosen yet, or held) -> confirmed + needs card (paid) -> ended.
-// It only shows. No forms, nothing loaded from other sites. A held booking can carry one Pay link, and
-// while the booking can still change, one small script re-reads this same page so it follows the call.
+// Nothing is typed here and nothing is loaded from other sites. A held booking can carry one Pay link.
+// While his call is live, the options carry answer buttons (which flight, who pays): the same answers he
+// can say aloud, posted to this page's own address. While the booking can still change, one small script
+// re-reads this same page so it follows the call.
 // It prints name, flights and needs only: never phone, email, member number or passport.
 
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
@@ -88,7 +90,7 @@ const CSS = `
   html { -webkit-text-size-adjust: 100%; background: #00393d; }
   body { margin: 0; min-height: 100vh; color: var(--ink); font-family: var(--sans); font-size: 20px; line-height: 1.45; }
   body::before { content: ""; position: fixed; inset: 0; z-index: -1; background: var(--sea); }
-  p, h1, h2, ol, dl, dd { margin: 0; }
+  p, h1, h2, ol, dl, dd, form { margin: 0; }
   .page { max-width: 30rem; margin: 0 auto; padding: 0 14px 36px; display: grid; gap: 14px; }
 
   /* The title sits straight on the jade, like an iPhone large title */
@@ -136,9 +138,17 @@ const CSS = `
   .status b { display: block; font-size: 22px; line-height: 1.25; margin-bottom: 4px; }
   .pay { display: block; margin-top: 18px; min-height: 64px; background: var(--go); color: var(--go-ink); font-size: 24px; font-weight: 700; line-height: 1.3; text-align: center; text-decoration: none; padding: 17px 20px; border-radius: 14px; box-shadow: 0 1px 0 rgba(255, 255, 255, .18) inset, 0 8px 18px rgba(0, 37, 39, .25); }
   .pay:hover { background: var(--go-hover); }
-  .pay:active { transform: scale(.98); }
-  .pay:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .pay:active, .pick:active { transform: scale(.98); }
+  .pay:focus-visible, .pick:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
   .paynote { margin-top: 10px; font-size: 17px; }
+
+  /* Answer buttons: the same answers he can say on the call. Filled = an open question, outlined = a change */
+  .pick { display: block; width: 100%; min-height: 64px; margin-top: 14px; padding: 14px 18px; border: 2px solid var(--go); border-radius: 14px; background: var(--go); color: var(--go-ink); font: 700 22px/1.3 var(--sans); cursor: pointer; -webkit-appearance: none; appearance: none; }
+  .pick:hover { background: var(--go-hover); border-color: var(--go-hover); }
+  .pick.alt { background: transparent; color: var(--go); }
+  .pick.alt:hover { background: var(--soft); border-color: var(--go); }
+  .opt .pick { grid-column: 1 / -1; }
+  .who { margin-top: 18px; }
 
   /* Needs card: solid jade, for staff at a counter */
   .show { font-size: 22px; font-weight: 700; margin-bottom: 12px; }
@@ -236,9 +246,12 @@ function leg(dir, seg, fromCity) {
 /** He pays himself when the order names no other payer. */
 const paysHimself = (o) => !o?.payer || String(o.payer).toLowerCase() === String(o.passenger ?? '').toLowerCase();
 
-function optionsState(page, order, payUrl) {
+function optionsState(page, order, payUrl, live) {
   const options = page.options ?? [];
   const held = order?.status === 'held' ? order : null;
+  // While his call is live and nothing is held yet, the page also takes his answers by button.
+  const ask = held ? null : live;
+  const chosen = (ask?.choice != null && options.find((o) => String(o.id) === String(ask.choice))) || null;
   // Only a web address, or a path on this site, can go behind the Pay button.
   const payHref = held && /^(https?:\/\/|\/(?![/\\]))/i.test(payUrl ?? '') ? payUrl : null;
   const other = held && !paysHimself(held) ? firstName(held.payer) : '';
@@ -252,19 +265,33 @@ function optionsState(page, order, payUrl) {
 
   const items = options.map((o) => {
     const isHeld = held && String(o.id) === String(held.option_id);
-    return `<li class="opt${isHeld ? ' held' : ''}">
+    const flag = isHeld ? 'Held for you' : o === chosen ? 'Your choice' : '';
+    return `<li class="opt${flag ? ' held' : ''}">
   <span class="n">${esc(o.id)}</span>
-  ${isHeld ? '<span><span class="flag">Held for you</span></span>' : ''}
+  ${flag ? `<span><span class="flag">${flag}</span></span>` : ''}
   <span class="when">${esc(fmtDay(o.out?.dep))}</span>
   <span class="time">${esc(fmtTime(o.out?.dep))}</span>
   <span class="soft">Arrives ${esc(fmtTime(o.out?.arr))}${String(o.out?.arr).slice(0, 10) > String(o.out?.dep).slice(0, 10) ? ' the next day' : ''}, ${esc(o.out?.city ?? o.out?.to)} time</span>
   ${o.note ? `<span class="soft">${esc(cap(o.note))}</span>` : ''}
   ${sameBack ? '' : `<span class="soft">Back ${esc(fmtDay(o.back?.dep))}, ${esc(fmtTime(o.back?.dep))}</span>`}
-  <span class="fare">${esc(money(o.fare_hkd))}</span>
+  <span class="fare">${esc(money(o.fare_hkd))}</span>${ask && o !== chosen ? `
+  <button class="pick${chosen ? ' alt' : ''}" name="option" value="${esc(o.id)}">${chosen ? 'Change to' : 'Choose'} flight ${esc(o.id)}</button>` : ''}
 </li>`;
   }).join('\n');
 
-  const status = held ? `<div class="sec">
+  // Who pays: asked once a flight is chosen, and only when a family payer is on file. An answer can still be changed.
+  const family = esc(ask?.family ?? '');
+  const pick = (value, text, alt = '') => `    <button class="pick${alt}" name="payer" value="${value}">${text}</button>`;
+  const who = !chosen || !family ? ''
+    : ask.payer === 'self' ? `    <p class="who"><b>You pay yourself.</b> After you say yes, the Pay button shows on this page.</p>\n${pick('family', `Ask ${family} to pay instead`, ' alt')}`
+    : ask.payer === 'family' ? `    <p class="who"><b>${family} will be asked to pay.</b> After you say yes, CATE sends ${family} the payment link.</p>\n${pick('self', 'I pay myself instead', ' alt')}`
+    : `    <h2 class="who">Who pays?</h2>\n${pick('self', 'I pay myself')}\n${pick('family', `Ask ${family} to pay`)}`;
+
+  const status = chosen ? `<div class="sec">
+  <div class="status">
+    <p><b>You chose flight ${esc(chosen.id)}</b>CATE will read the booking back to you on the phone. Nothing is booked until you say yes.</p>
+  </div>${who ? `\n  <form method="post">\n${who}\n  </form>` : ''}
+</div>` : held ? `<div class="sec">
   <div class="status">
     <span class="dot" aria-hidden="true">…</span>
     <p><b>${other ? `Waiting for ${esc(other)} to pay` : payHref ? 'Pay to confirm your booking' : 'Waiting for payment'}</b>Option ${esc(held.option_id)} is held under booking reference ${esc(held.ref)}. ${how}</p>
@@ -273,8 +300,10 @@ function optionsState(page, order, payUrl) {
   <p class="soft paynote">Test payment for this prototype. No real money moves.</p>` : ''}
 </div>` : '';
 
+  const say = !ask ? 'To choose, say the option number on the call.'
+    : chosen ? 'To change, tap another flight, or say its number on the call.' : 'Tap a flight, or say its number on the call.';
   const list = options.length
-    ? `<ol class="opts">\n${items}\n</ol>${held ? '' : '\n<p class="say">To choose, say the option number on the call.</p>'}`
+    ? `${ask ? '<form method="post">\n' : ''}<ol class="opts">\n${items}\n</ol>${ask ? '\n</form>' : ''}${held ? '' : `\n<p class="say">${say}</p>`}`
     : '<p>Your flight options will show here during your call.</p>';
 
   const back = sameBack
@@ -364,13 +393,18 @@ ${footer(false)}`);
  * @param {Date|number|string} [a.now]
  * @param {string|null} [a.payUrl]  payment page for a traveller who pays himself. While the booking is
  *                                  held, the page then shows one Pay button to it. The page still asks for nothing.
+ * @param {object|null} [a.live]    pass it only while this page's call is live and nothing is held:
+ *                                  { choice: option id chosen so far | null, payer: 'self' | 'family' | null,
+ *                                    family: first name of the family payer on file, '' if none }.
+ *                                  The page then carries answer buttons that POST `option=<id>` or
+ *                                  `payer=self|family` to its own address. Without it the page only shows.
  */
-export function renderTripPage({ page, order = null, profile = null, now = Date.now(), payUrl = null }) {
+export function renderTripPage({ page, order = null, profile = null, now = Date.now(), payUrl = null, live = null }) {
   if (!page) return notFoundPage();
   const expired = page.expires != null && new Date(now) > new Date(page.expires);
   if (expired || order?.status === 'ended') return endedState(order);
   if (order?.status === 'paid') return confirmedState(order, profile);
-  return optionsState(page, order, payUrl);
+  return optionsState(page, order, payUrl, live);
 }
 
 /** The same page for `/`, unknown codes and anything else: it says nothing about any booking. */
