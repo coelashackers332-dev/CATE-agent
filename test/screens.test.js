@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderTripPage, notFoundPage } from '../src/screens/trip.js';
 import { optionsSms, bookedSms, payRequestSms } from '../src/screens/texts.js';
-import { payEmail } from '../src/screens/emails.js';
+import { payEmail, tripEmail, bookedEmail } from '../src/screens/emails.js';
 
 // The full member record, private fields included: the page must not print them even when handed them.
 const member = JSON.parse(readFileSync(new URL('../data/membership.json', import.meta.url), 'utf8'))[0];
@@ -213,7 +213,8 @@ test('SMS: plain ASCII, starts with Cathay CATE, every detail in the text', () =
   for (const s of ['1) Fri 19 Feb 11:40, HKD 8420', '2) Fri 19 Feb 23:50, HKD 7960', '3) Fri 19 Feb 09:10 via Tokyo, HKD 6900', 'Back Wed 31 Mar', link, 'never asks for card numbers']) {
     assert.ok(t1.includes(s), `text 1 missing ${s}`);
   }
-  for (const s of ['K7Q2XM', 'CX0V1', 'Fri 19 Feb 11:40', 'Hong Kong to Vancouver', 'Wed 31 Mar 13:30', 'Wheelchair from check-in to the gate, WCHR', `Same link: ${link}`]) {
+  assert.ok(t2.length <= 306, `text 2 is ${t2.length} characters`);
+  for (const s of ['K7Q2XM', 'CX0V1 Fri 19 Feb 11:40', 'Hong Kong to Vancouver', 'Back CX0V2 Wed 31 Mar 13:30', 'Show staff: Wheelchair from check-in to the gate, WCHR. Please speak slowly.', `Trip: ${link}`]) {
     assert.ok(t2.includes(s), `text 2 missing ${s}`);
   }
   for (const s of ['Wong Tak Ming', 'Reply PAY', 'HKD 8420', 'K7Q2XM', 'Vancouver']) assert.ok(pay.includes(s), `pay text missing ${s}`);
@@ -226,7 +227,9 @@ test('SMS: stays ASCII and within 2 parts with awkward input', () => {
   assert.match(t1, ASCII);
   assert.ok(t1.length <= 306, `${t1.length} characters`);
   assert.ok(t1.includes('Zurich') && t1.includes('3) Fri 19 Feb 09:10'));
-  assert.match(bookedSms(order({ status: 'paid', passenger: 'WONG TÁK MĪNG' }), member, link), ASCII);
+  const t2 = bookedSms(order({ status: 'paid', passenger: 'WONG TÁK MĪNG' }), member, longLink);
+  assert.match(t2, ASCII);
+  assert.ok(t2.length <= 306, `text 2 is ${t2.length} characters`);
   assert.match(payRequestSms(order(), 'Mr Wong’s'), ASCII);
 });
 
@@ -261,4 +264,56 @@ test('payEmail: inline styles only, text of 20 px or more, values escaped', () =
   const sizes = [...m.html.matchAll(/font-size:(\d+)px/g)].map((x) => Number(x[1]));
   assert.ok(sizes.length > 0 && Math.min(...sizes) >= 20, `smallest text is ${Math.min(...sizes)} px`);
   for (const secret of PRIVATE) assert.ok(!m.html.includes(secret) && !m.text.includes(secret));
+});
+
+test('each option says when it lands, in local time, and says so when that is the next day', () => {
+  const late = { ...options[1], out: { ...options[1].out, arr: '2027-02-20T06:10' } };
+  const html = render(null, { ...page, options: [options[0], late] });
+  assert.ok(html.includes('Arrives 07:40, Vancouver time'));
+  assert.ok(html.includes('Arrives 06:10 the next day, Vancouver time'));
+  assert.ok(!/lands d/.test(html), 'no bare "lands 07:40" next to the departure time');
+});
+
+// No SMS any more: the traveller gets his trip link, and later his booking, by email.
+const fonts = (html) => [...html.matchAll(/font-size:(d+)px/g)].map((x) => Number(x[1]));
+
+test('tripEmail: the flight options and one big button to the trip page', () => {
+  const m = tripEmail({ options, link, travellerName: 'Wong Tak Ming' });
+  assert.ok(m.subject.includes('Vancouver'));
+  assert.equal(m.html.split('<a ').length - 1, 1, 'one link only');
+  assert.ok(m.html.includes(`href="${link}"`) && m.html.includes('>Open your trip page</a>'));
+  assert.ok(m.text.includes(link));
+  for (const body of [m.html, m.text]) {
+    for (const t of ['Hello Wong Tak Ming', 'Friday 19 February', '11:40', '23:50', '09:10', 'HKD 8,420', 'HKD 6,900', 'via Tokyo', 'Wednesday 31 March', 'Illustrative fares', 'never asks for passwords or card numbers']) {
+      assert.ok(body.includes(t), `missing ${t}`);
+    }
+  }
+});
+
+test('bookedEmail: booked, the needs for staff, and the trip page link', () => {
+  const m = bookedEmail({ order: order({ status: 'paid' }), profile: member, link });
+  assert.ok(m.subject.includes('K7Q2XM') && /booked/i.test(m.subject));
+  assert.ok(m.html.includes(`href="${link}"`) && m.html.includes('>Open your needs card</a>'));
+  for (const body of [m.html, m.text]) {
+    for (const t of ['Daniel paid', 'K7Q2XM', 'WONG TAK MING', 'CX0V1', 'Friday 19 February', 'Wednesday 31 March', 'Wheelchair from check-in to the gate', 'WCHR', 'Please speak slowly', 'Window seat', 'Vegetarian meal']) {
+      assert.ok(body.includes(t), `missing ${t}`);
+    }
+  }
+});
+
+test('traveller emails: inline styles only, text of 20 px or more, escaped, nothing private, web links only', () => {
+  const odd = options.map((o) => ({ ...o, note: '<script>x</script>' }));
+  const mails = [
+    tripEmail({ options: odd, link, travellerName: 'Wong Tak Ming' }),
+    bookedEmail({ order: order({ status: 'paid', passenger: '<b>WONG</b>' }), profile: member, link }),
+  ];
+  for (const m of mails) {
+    assert.ok(!/<(style|script|img|link)/i.test(m.html));
+    assert.ok(Math.min(...fonts(m.html)) >= 20, `smallest text is ${Math.min(...fonts(m.html))} px`);
+    for (const secret of PRIVATE) assert.ok(!m.html.includes(secret) && !m.text.includes(secret));
+  }
+  assert.ok(mails[0].html.includes('&lt;script&gt;') && mails[1].html.includes('&lt;b&gt;WONG'));
+  for (const bad of ['javascript:alert(1)', '//evil.example.com/v/x']) {
+    assert.ok(!tripEmail({ options, link: bad, travellerName: 'Wong Tak Ming' }).html.includes('<a '), `${bad} must not become a button`);
+  }
 });
