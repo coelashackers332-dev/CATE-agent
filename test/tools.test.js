@@ -27,7 +27,12 @@ const newCall = (id = 'c1', callerId = store.members[0].phone) => ({
   pageCode: null, pendingHold: null, assistance: null, ref: null, session: null,
 });
 
+// Each test sees PAYMENT=sms unless it sets another mode itself, whatever the local .env says.
+const PAYMENT_IN_ENV = config.payment;
+afterEach(() => { config.payment = PAYMENT_IN_ENV; });
+
 beforeEach(() => {
+  config.payment = 'sms';
   store.reset({ log: false });
   events = [];
   sent = { sms: [], email: [] };
@@ -382,4 +387,52 @@ test('no flights for the dates: the days we do fly are named, with no flight, fa
   const none = await run('find_flights', { to: 'Vancouver', after: '2027-01-01', before: '2027-01-16' });
   assert.equal(none.ok, false);
   assert.match(none.error, /We fly to Vancouver on Friday 19 February, Saturday 20 February, and back on Wednesday 31 March/);
+});
+
+test('no flights for the dates: with the full schedule only the first days from his date are named', async () => {
+  await verify();
+  const none = await run('find_flights', { to: 'London', after: '2026-12-20', before: '2026-12-20' });
+  assert.equal(none.ok, false);
+  const named = none.error.match(/We fly to London on (.*?), and back/)?.[1] ?? '';
+  assert.ok(named.split(', ').length <= 5 + 1, named);   // five days, then "and most days after that"
+  assert.match(named, /^Monday 21 December, .* and most days after that$/);   // the window starts after his date
+});
+
+test('cities: every airport in the schedule is known by its city name, and common other names work', async () => {
+  await verify();
+  for (const city of ['London', 'Tokyo Haneda', 'Saigon', 'Bangalore']) {
+    const found = await run('find_flights', { to: city, after: '2026-11-20', before: '2026-12-10' });
+    // a known city: never "no flights for <city>" (his "not too early" may still rule out every flight on some routes)
+    assert.doesNotMatch(found.error ?? '', /We have no flights for/, city);
+  }
+  assert.match((await run('find_flights', { to: 'Atlantis', after: '2026-11-20', before: '2026-12-10' })).error, /We have no flights for/);
+});
+
+test('PAYMENT=page: the pay email carries the pay page, no "Reply PAY" text; a self-payer is sent to his trip page', async () => {
+  config.payment = 'page';
+  const book = async (payer) => {
+    await verify();
+    await run('find_flights', VANCOUVER);
+    await run('choose_option', { option_id: '1' });
+    await run('set_preferences', { seat_ok: true, meal_ok: true });
+    await run('set_assistance', { same_as_last_trip: true });
+    await run('set_payer', { payer });
+    await run('hold_booking', {});
+    return run('hold_booking', { caller_confirmed: true });
+  };
+  await book('family');
+  const smsBefore = sent.sms.length;
+  assert.equal((await run('send_pay_link', {})).sent_to, 'Daniel');
+  assert.equal(sent.email.at(-1).text, `Wong Tak Ming ${BASE_URL}/pay/${call.pageCode}`);
+  assert.equal(sent.sms.length, smsBefore, 'no "Reply PAY" text');
+
+  store.reset({ log: false });
+  call = newCall();
+  sent = { sms: [], email: [] };
+  await book('self');
+  const self = await run('send_pay_link', {});
+  assert.equal(self.sent_to, 'his trip page');
+  assert.match(self.say, /Pay button on his trip page/);
+  assert.equal(sent.email.length, 0);
+  assert.ok(!sent.sms.some((m) => m.body.startsWith('PAYREQ')));
 });

@@ -20,13 +20,33 @@ import { fmtDay } from './screens/trip.js';
 const MAX_VERIFY_TRIES = 3;
 const MAX_PASSAGES = 3;   // how many knowledge passages ask_cathay hands the model
 
-// ---- Cities we fly in the seed data. Anything else gets "no flights", never a guess.
-const CITIES = { HKG: 'Hong Kong', YVR: 'Vancouver', KIX: 'Osaka', NRT: 'Tokyo' };
+// ---- Cities we fly: every airport in data/flights.json (the OAG schedule). Anything else gets "no flights", never a guess.
+// Where a city has two airports, the city name means the main one (Tokyo = Narita, Shanghai = Pudong).
+const CITIES = {
+  HKG: 'Hong Kong', YVR: 'Vancouver', KIX: 'Osaka', NRT: 'Tokyo', HND: 'Tokyo Haneda', NGO: 'Nagoya', FUK: 'Fukuoka',
+  CTS: 'Sapporo', ICN: 'Seoul', TPE: 'Taipei', KHH: 'Kaohsiung', PEK: 'Beijing', PVG: 'Shanghai', SHA: 'Shanghai Hongqiao',
+  CAN: 'Guangzhou', HGH: 'Hangzhou', CTU: 'Chengdu', CKG: 'Chongqing', WUH: 'Wuhan', WNZ: 'Wenzhou', FOC: 'Fuzhou',
+  XMN: 'Xiamen', CSX: 'Changsha', TAO: 'Qingdao', NKG: 'Nanjing', XIY: "Xi'an", NGB: 'Ningbo', CGO: 'Zhengzhou',
+  HAK: 'Haikou', URC: 'Urumqi', MNL: 'Manila', CEB: 'Cebu', SGN: 'Ho Chi Minh City', HAN: 'Hanoi', BKK: 'Bangkok',
+  HKT: 'Phuket', KUL: 'Kuala Lumpur', PEN: 'Penang', SIN: 'Singapore', CGK: 'Jakarta', SUB: 'Surabaya', DPS: 'Bali',
+  KTI: 'Phnom Penh', DEL: 'Delhi', BOM: 'Mumbai', BLR: 'Bengaluru', MAA: 'Chennai', HYD: 'Hyderabad', KTM: 'Kathmandu',
+  DAC: 'Dhaka', CMB: 'Colombo', SYD: 'Sydney', MEL: 'Melbourne', BNE: 'Brisbane', PER: 'Perth', ADL: 'Adelaide',
+  AKL: 'Auckland', CHC: 'Christchurch', LHR: 'London', MAN: 'Manchester', CDG: 'Paris', FRA: 'Frankfurt', MUC: 'Munich',
+  ZRH: 'Zurich', AMS: 'Amsterdam', BRU: 'Brussels', MXP: 'Milan', MAD: 'Madrid', JNB: 'Johannesburg',
+  JFK: 'New York', BOS: 'Boston', ORD: 'Chicago', DFW: 'Dallas', LAX: 'Los Angeles', SFO: 'San Francisco',
+  SEA: 'Seattle', YYZ: 'Toronto',
+};
+// Other names people say for the same airports.
+const ALIASES = {
+  haneda: 'HND', narita: 'NRT', hongqiao: 'SHA', pudong: 'PVG', bangalore: 'BLR', saigon: 'SGN', xian: 'XIY',
+  denpasar: 'DPS', 'new york city': 'JFK', 'new delhi': 'DEL', bombay: 'BOM', madras: 'MAA',
+};
 const cityOf = (code) => CITIES[code] ?? code;
 const codeOf = (said) => {
   const s = String(said ?? '').trim().toLowerCase();
-  return Object.keys(CITIES).find((code) => code.toLowerCase() === s || CITIES[code].toLowerCase() === s) ?? null;
+  return Object.keys(CITIES).find((code) => code.toLowerCase() === s || CITIES[code].toLowerCase() === s) ?? ALIASES[s] ?? null;
 };
+const MAX_DAYS_NAMED = 5;   // "what days do you fly?": at most this many days are read out, from his date (or today) on
 
 // ---- Wheelchair rule table (IATA special service request codes). Asked in this order; the first "no" sets the code.
 const RULES = [
@@ -279,9 +299,15 @@ export function createTools(deps) {
       const from = codeOf(args.from ?? 'HKG');
       if (!to || !from || to === from) return fail(`We have no flights for "${args.to}" here. Do not suggest any flight. Ask him which city again.`);
       // "What dates do you have?": the days we fly this route, from the schedule, so the model has something true to offer.
+      // With the full OAG schedule a route flies most days, so only the first few days from his date (or today) are named.
       const daysWeFly = async () => {
-        const all = await cathay.searchFlights({ from, to, after: '2000-01-01', before: '2100-01-01' });
-        const days = (flights) => [...new Set(flights.map((f) => fmtDay(f.dep)))].join(', ');
+        const today = new Date().toISOString().slice(0, 10);
+        const start = isDate(args.after) && args.after > today ? args.after : today;
+        const all = await cathay.searchFlights({ from, to, after: start, before: '2100-01-01' });
+        const days = (flights) => {
+          const list = [...new Set([...flights].sort((a, b) => a.dep.localeCompare(b.dep)).map((f) => fmtDay(f.dep)))];
+          return list.slice(0, MAX_DAYS_NAMED).join(', ') + (list.length > MAX_DAYS_NAMED ? ' and most days after that' : '');
+        };
         const out = days(all.out.filter((f) => f.return_fare_hkd != null));
         return out && all.back.length ? ` We fly to ${cityOf(to)} on ${out}, and back on ${days(all.back)}: tell him those days and ask if they would work.` : '';
       };
@@ -438,6 +464,17 @@ export function createTools(deps) {
     async send_pay_link(_args, call, cathay) {
       if (!call.ref) return fail('There is no held booking yet. Hold the booking first.');
       if (call.payRequested) return { ok: true, sent_to: call.payRequested, already_sent: true };
+      // PAYMENT=page: the demo pay page for this booking's trip page (hold_booking created it); nobody replies PAY.
+      const payUrl = config.payment === 'page' && call.pageCode ? `${baseUrl}/pay/${call.pageCode}` : null;
+      if (call.paysSelf && payUrl) {
+        // His trip page (the link in his text) shows the Pay button to payUrl while the booking is held.
+        emit(call.id, 'screen', { what: 'pay_page', summary: 'Pay button on his trip page' });
+        call.payRequested = 'his trip page';
+        return {
+          ok: true, sent_to: call.payRequested,
+          say: 'Tell him he can pay with the Pay button on his trip page, the link in the text we sent him. A text with his booking and his needs card comes as soon as it is paid. Then ask if there is anything else you can help with.',
+        };
+      }
       if (call.paysSelf) {
         // call.callerId IS the number on file (see text_options). shortcut: no email, the model-safe profile has none; text only.
         await deps.messages.sendSms(call.callerId, deps.texts.payRequestSms(call.order, titleCase(call.order.passenger)));
@@ -452,8 +489,8 @@ export function createTools(deps) {
       if (!delegate) return fail('No family payer is on file for him. Say that a member of staff will call him about payment.');
       const first = delegate.name.split(' ')[0];
       const traveller = titleCase(call.order.passenger);
-      // PAYMENT=sms: no pay page exists, so the email tells him to reply PAY (payUrl null). With Stripe, payUrl becomes the checkout address.
-      const mail = deps.emails.payEmail({ order: call.order, travellerName: traveller, payerName: delegate.name, payUrl: null });
+      // PAYMENT=sms: no pay page, so the email tells him to reply PAY (payUrl null). PAYMENT=page: the email's Pay button opens payUrl.
+      const mail = deps.emails.payEmail({ order: call.order, travellerName: traveller, payerName: delegate.name, payUrl });
       await deps.messages.sendEmail(delegate.email, mail.subject, mail.html, mail.text);
       emit(call.id, 'screen', { what: 'pay_email', summary: `pay request email to ${first}` });
       if (config.payment === 'sms') {
