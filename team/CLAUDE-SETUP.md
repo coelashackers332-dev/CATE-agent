@@ -71,10 +71,10 @@ Install only the row for the person named in step 1.
 
 | Person | Stream | Install |
 |---|---|---|
-| **Owen** | Voice: Nova 2 Sonic driver (`src/model/nova.js`) | `aws-core@claude-plugins-official` · `twilio-developer-kit@claude-plugins-official` · `context7@claude-plugins-official` |
-| **Marvel** | Prompt, RAG passages, rules + tests | `agent-skills@addy-agent-skills` · `context7@claude-plugins-official` |
-| **Harell** | Infra (EC2, Caddy, IAM, SSM), live SMS + email, payment, security pass | `aws-core@claude-plugins-official` · `twilio-developer-kit@claude-plugins-official` · `stripe@claude-plugins-official` · `security-guidance@claude-plugins-official` |
-| **Cavell** | Projector + trip page on real phones, screenshots, fallback video | `frontend-design@claude-plugins-official` · `playwright@claude-plugins-official` |
+| **Owen** | Voice pipe end to end (Twilio voice route, audio stream, Nova 2 Sonic), deploy with Marvel | `aws-core@claude-plugins-official` · `twilio-developer-kit@claude-plugins-official` · `context7@claude-plugins-official` |
+| **Marvel** | Prompt, RAG passages, rules + tests, deploy with Owen | `agent-skills@addy-agent-skills` · `context7@claude-plugins-official` · `aws-core@claude-plugins-official` |
+| **Harell** | Live SMS + email, payment, payment-facing screens and design with Cavell, security pass | `twilio-developer-kit@claude-plugins-official` · `stripe@claude-plugins-official` · `security-guidance@claude-plugins-official` · `frontend-design@claude-plugins-official` |
+| **Cavell** | Projector + trip page on real phones, design with Harell, screenshots, fallback video | `frontend-design@claude-plugins-official` · `playwright@claude-plugins-official` |
 | **Max** | Deck, one-pager, submissions | `document-skills@anthropic-agent-skills` · `canva@claude-plugins-official` |
 
 Run one `claude plugin install <plugin>` per entry. Why each one:
@@ -105,31 +105,31 @@ The note is the block for the person named in step 1:
 **Owen**
 ```
 ## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
-When working in the CATE-agent repo, I'm Owen: voice, the Nova 2 Sonic driver.
-My files: src/model/nova.js, src/mulaw.js. I merge all fixes after the Sun 03:00 freeze.
+When working in the CATE-agent repo, I'm Owen: the voice pipe end to end (Twilio voice route, audio stream, Nova 2 Sonic), and deploy with Marvel.
+My files: src/model/nova.js, src/mulaw.js, the voice half of src/twilio.js; deploy.sh + Caddy config, README.md, .env.example with Marvel. I add dependencies, back up Marvel on deploys, and merge all fixes after the Sun 03:00 freeze.
 Stage: I speak parts 4–6 and answer tech questions. Everything else: follow team/GIT.md and the repo CLAUDE.md.
 ```
 
 **Marvel**
 ```
 ## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
-When working in the CATE-agent repo, I'm Marvel: system prompt, RAG passages, booking rules + tests.
-My files: src/tools.js, src/knowledge.js, src/model/prompt.js, knowledge/, data/.
+When working in the CATE-agent repo, I'm Marvel: system prompt, RAG passages, booking rules + tests, and deploy with Owen.
+My files: src/tools.js, src/knowledge.js, src/model/prompt.js, knowledge/, data/; deploy.sh + Caddy config, README.md, .env.example with Owen. I'm the main deployer and run the Sun 10:15 submission tag.
 Stage: I'm the caller (Mr Wong). Everything else: follow team/GIT.md and the repo CLAUDE.md.
 ```
 
 **Harell**
 ```
 ## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
-When working in the CATE-agent repo, I'm Harell: infra (EC2, Caddy, IAM, SSM), live SMS + email, payment, security pass.
-My files: src/messages.js, src/payment.js, deploy.sh + Caddy config, README.md, .env.example. I'm the only one who deploys and adds dependencies.
+When working in the CATE-agent repo, I'm Harell: live SMS + email, payment, payment-facing screens and design with Cavell, security pass.
+My files: src/messages.js, src/payment.js, the SMS/payment half of src/twilio.js. I don't deploy; Marvel or Owen does.
 Stage: Daniel's phone + timekeeper. Everything else: follow team/GIT.md and the repo CLAUDE.md.
 ```
 
 **Cavell**
 ```
 ## CATE-agent repo (Cathay Hackathon, team E332, 14–15 Nov 2026)
-When working in the CATE-agent repo, I'm Cavell: projector view, trip page on real phones, screenshots, fallback video.
+When working in the CATE-agent repo, I'm Cavell: projector view, trip page on real phones, design with Harell, screenshots, fallback video.
 My files: src/screens/*.
 Stage: operator, I drive the laptop. Everything else: follow team/GIT.md and the repo CLAUDE.md.
 ```
