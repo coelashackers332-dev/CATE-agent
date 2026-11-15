@@ -46,6 +46,9 @@ export function createPhone({ tools, startSession }) {
   }
 
   async function begin(call, sendAudio, onInterrupt) {
+    // The one-time code goes out the moment the call starts, so CATE can greet at once instead of first calling a tool.
+    // runTool never throws, and the email itself is sent in the background (tools.js).
+    await tools.runTool('send_code', {}, call);
     const session = await startSession({ call, specs: tools.specs, runTool: tools.runTool, sendAudio, onInterrupt, emit });
     if (store.activeCall !== call) { session?.close(); return; }   // the caller hung up while the model was starting
     call.session = session;
@@ -71,7 +74,10 @@ export function createPhone({ tools, startSession }) {
       begin(
         call,
         (pcm) => { if (ws.readyState === ws.OPEN) ws.send(fromPcm(pcm)); },
-        () => say('clear'),   // the caller talked over CATE: the bridge drops the audio it has not played yet
+        () => {   // the caller talked over CATE: the bridge drops the audio it has not played yet
+          say('clear');
+          emit(call.id, 'system', { system: 'Phone', action: 'barge-in', ok: true, summary: 'caller talked over CATE' });
+        },
       ).catch((err) => {
         console.error(`[call ${call.id}] model session failed to start: ${err.message}`);
         endCall(call);

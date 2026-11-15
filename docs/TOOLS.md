@@ -4,7 +4,7 @@ The voice model can only listen, talk, and choose one of the tools on this page.
 
 | # | Tool | In one line |
 |---|---|---|
-| 1 | [`verify_caller`](#1-verify_caller) | Checks the caller is the member, from the phone number and one travel-history question |
+| 1 | [`send_code`, `verify_caller`](#1-send_code-and-verify_caller) | Emails a one-time code to the member's address on file, then checks the code the caller reads out |
 | 2 | [`apply_profile`](#2-apply_profile) | Loads the member's name, preferences, needs and recent trips |
 | 3 | [`find_flights`](#3-find_flights) | Returns up to 3 flight options from the schedule, matched to the profile |
 | 4 | [`text_options`](#4-text_options) | Texts the options and a view-only trip page link to the caller |
@@ -12,13 +12,13 @@ The voice model can only listen, talk, and choose one of the tools on this page.
 | 6 | [`hold_booking`](#6-hold_booking) | Reads the trip back, then holds the booking after a yes |
 | 7 | [`send_pay_link`](#7-send_pay_link) | Opens the payment page on the member's own phone (the member always pays himself) |
 | 8 | [`ask_cathay`](#8-ask_cathay) | Answers a general question about flying with Cathay, from checked passages only |
-| 9 | [`choose_option`, `set_preferences`, `set_baggage`, `set_special_request`](#9-the-callers-answers-option-seat-and-meal-baggage-requests) | Record the caller's answers: option, seat and meal, extra bags, special requests |
+| 9 | [`choose_option`, `set_preferences`, `set_baggage`, `set_special_request`, `keep_as_last_time`](#9-the-callers-answers-option-seat-and-meal-baggage-requests) | Record the caller's answers: option, seat and meal, extra bags, special requests, or "same as last time" for all of them |
 | 10 | [`find_booking`, `change_booking`](#10-find_booking-and-change_booking) | Find a booking he has and change its dates, seat, meal or baggage |
-The usual order in a call is 1 → 2 → 3 → 4 (optional) → 5 → 6 (twice) → 7. Tool 8 can be called at any point after verification, whenever the caller asks a general question.
+The usual order in a call is 1 → 2 → 3 → 4 (optional) → 9 and 5 → 6 (twice) → 7. Tool 8 can be called at any point after verification, whenever the caller asks a general question.
 
 ## Rules that apply to every tool
 
-- **Verification first.** Every tool except `verify_caller` is refused until verification has passed.
+- **Verification first.** Every tool except `send_code` and `verify_caller` is refused until verification has passed.
 - **Only declared inputs get through.** Any extra field the model sends (a phone number, a name) is dropped before the tool runs.
 - **A tool never throws to the model.** A problem comes back as `{ ok: false, error: "…" }`, where `error` is a plain-words instruction for the model, for example "Ask him which city again."
 - **Every call is logged.** Each tool emits a `tool_call` and a `tool_result` event, shown on the projector view and written to the run log.
@@ -27,15 +27,17 @@ The usual order in a call is 1 → 2 → 3 → 4 (optional) → 5 → 6 (twice) 
 
 ---
 
-## 1. `verify_caller`
+## 1. `send_code` and `verify_caller`
 
-Checks that the caller is the member. Call it as soon as the caller has answered "Where did you last fly with us?".
+Checks that the caller is the member, with a one-time code by email.
 
-**Input**
+**`send_code`** (no input). The phone line runs it by itself the moment a call starts (`src/phone.js`), so CATE can greet at once; the model calls it only when the caller asks for a new code. It finds the member by the calling number, gets a 6-digit code from the Membership system and emails it to the address on file (as a text sent by email). The model never sees the code or the address. At most 3 codes per call.
+
+**`verify_caller`** input:
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `answer` | string | yes | What the caller said, e.g. "Osaka, last May" |
+| `code` | string | yes | The six digits the caller read out, e.g. "482915" (spaces are fine) |
 
 **Returns**
 
@@ -46,17 +48,22 @@ Checks that the caller is the member. Call it as soon as the caller has answered
 **Rules in code**
 
 - The phone number comes from the phone network (the caller ID), never from speech or from the model.
-- The answer is checked inside the mock Cathay system against the latest flown trip. It passes if it names that trip's city; if it also names a month, the month must match. The model never sees the correct answer.
+- The code is checked inside the mock Cathay system (`POST /membership/verify`): it works once, for 10 minutes. Without an open code the old travel-history question still passes there, but `verify_caller` refuses until a code has been sent.
+- A code is checked only if the caller has spoken since it was sent, so a code the model invents is refused and costs no try.
 - On a pass, the call gets a session token. Profile and booking requests are refused without it.
-- **Three wrong answers lock the call** until the demo is reset.
+- **Three wrong codes lock the call** until the demo is reset.
+- **Tier gate:** see section 9.
 
 **Refusals**
 
 | When | The model is told |
 |---|---|
-| The answer does not match | Ask the question once more. Do not give hints. |
+| No code sent yet | Call send_code first. |
+| The caller has not spoken since the code went out | Do not guess one: wait for him to read it. |
+| Not six digits | Ask him to read out all six digits. |
+| The code does not match | Ask him to read it again, digit by digit; after 10 minutes, send a new one. |
 | The phone number is not on a membership | Say you cannot go on; a member of staff can help. |
-| Three wrong answers already | Say you cannot go on; a member of staff can help. |
+| Three wrong codes already | Say you cannot go on; a member of staff can help. |
 
 ## 2. `apply_profile`
 
@@ -93,11 +100,13 @@ Finds flight options. Call it when the destination and both dates are known.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `to` | string | yes | Destination city as the caller said it, e.g. "Vancouver" (airport codes also work) |
-| `after` | string | yes | Leave after this date, `YYYY-MM-DD` |
-| `before` | string | yes | Be back before this date, `YYYY-MM-DD` |
+| `depart_on` | string | for exact days | The day he leaves, `YYYY-MM-DD` |
+| `return_on` | string | for exact days | The day he flies back: the day he names, or `depart_on` plus how long he stays |
+| `after` | string | for a vague time | Leave after this date, `YYYY-MM-DD` ("after Christmas") |
+| `before` | string | for a vague time | Be back before this date, `YYYY-MM-DD` ("before New Year") |
 | `from` | string | no | Departure city. Left out means Hong Kong. |
 
-The model must turn phrases such as "after Chinese New Year" into dates; the tool takes exact dates only.
+Exact days ("the 16th for five days") use `depart_on` and `return_on`; a vague time uses `after` and `before`. The model turns phrases such as "after Christmas" into dates from the festival list in the prompt; the tool takes `YYYY-MM-DD` only.
 
 **Returns**
 
@@ -118,9 +127,10 @@ The model must turn phrases such as "after Chinese New Year" into dates; the too
 **Rules in code**
 
 - Only flights in the schedule data that have a fare. An unknown city or dates with no flights return no option at all, never a guess.
-- At most 3 options: one per flight number, direct flights first, then by departure time.
-- Flights leaving before the member's `earliest_departure` are left out, and `left_out` says how many.
-- One return flight is chosen for all options: not too early, direct if possible.
+- **Exact days:** only flights on the day he named, up to 3, even if there is just one. If that day has none, the nearest days (up to 2 either side), and the result says so first. The return is on the day he named, or the nearest.
+- **Vague time:** up to 3 options, all of them when fewer fit: one per flight number first (direct first, then by time), then the same flights on other dates, then flights earlier than he likes.
+- **Each option has its own return flight**, at least one night after it lands: a same-day return is never offered.
+- Flights leaving before the member's `earliest_departure` come last, and `left_out` says how many were not offered.
 - `read_out` and `return_flight` are ready-made sentences. The model reads them, so it cannot say a time or price that is not in the data.
 - Seat preference is not used for ranking (the demo data has no seat map). It is carried to the booking.
 
@@ -129,6 +139,7 @@ The model must turn phrases such as "after Chinese New Year" into dates; the too
 | When | The model is told |
 |---|---|
 | Unknown city | No flights for that city. Do not suggest any flight. Ask which city again. |
+| A day to leave but no stay length | Ask only "How many days will you stay?" |
 | Dates missing or not `YYYY-MM-DD` | Two dates are needed. Ask him for the dates. |
 | Nothing fits | No flights fit those dates. Ask if other dates would work. |
 
@@ -224,6 +235,8 @@ Holds the booking, in two steps, so nothing is held before the caller has heard 
 **Rules in code**
 
 - A hold is made only if step 1 ran for the same option. `caller_confirmed: true` on a first call, or for a different option, returns the read-back again.
+- **Consent:** a yes counts only after CATE has actually said the read-back's question ("Shall I hold this booking?"), as Nova reports each sentence it speaks. A yes said over an unfinished read-back is refused and nothing is held.
+- Step 1 also puts the whole booking on his trip page ("Check your booking": flights, seat, meal, help, bags, total), so he can see it while he hears it.
 - Only an option from this call can be held.
 - Assistance must be set first (`set_assistance`).
 - The passenger name, seat and meal come from the profile, never from speech. A misheard name would not match the passport.
@@ -321,6 +334,7 @@ One tool per answer. Each result has `confirm` (a sentence to say back) and `nex
 | `set_preferences` | `seat_ok`, `meal_ok`, and only if he wants something else: `seat` (window, aisle), `seat_area` (front, middle, back), `seat_number` (e.g. 21A), `meal` (fixed list) | A seat number must exist on our planes (rows 1–70, letters A–K without I). A "no" without a choice is answered with the question, never a guess. |
 | `set_baggage` | `extra_bags` 0–3 | The fee comes from the Orders system (`data/fees.json`, illustrative), never from the model. More than 3 bags goes to staff. |
 | `set_special_request` | `request` in his words, or `none` | Recorded on the booking for staff, max 3, 200 characters each. Never granted or priced by CATE; medical equipment is passed on for Cathay's approval. |
+| `keep_as_last_time` | none | One "yes" for everything as on his last trip: the seat and meal on his membership, the wheelchair help from his last flown trip, no extra bags, no requests. Refused before an option is chosen or without an earlier trip. |
 
 Option, seat and meal, and wheelchair help must be recorded before `hold_booking`. Baggage and requests are asked once but never block the hold. Name and passport come from the profile: the Orders system adds "HKG passport ending 478" to the booking; the number never reaches the model.
 
@@ -349,4 +363,4 @@ const { specs, runTool } = createTools({ cathay, messages, texts, emails, knowle
 - `call` is the call context from `CONTRACTS.md` §2. Tools keep their state on it: `verified`, `token`, `profile`, `options`, `assistance`, `pendingHold`, `ref`, `order`, `pageCode`, `payRequested`.
 - Tests: `test/tools.test.js` covers each tool and its refusals; `test/knowledge.test.js` covers the search and the knowledge files; `test/golden.test.js` plays the whole booking call end to end.
 
-**Status.** So far the 7 booking tools have been called only by the scripted stand-in (`src/model/scripted.js`), which calls them in the right order every time; `ask_cathay` has been called only from tests. None of the tools has yet been driven by the live voice model. The flights in the examples are placeholders until the real schedule snapshot is loaded, and the knowledge passages are unverified drafts.
+**Status.** All tools have been driven by the live voice model (Amazon Nova 2 Sonic) on real calls, end to end through payment, as well as by the scripted stand-in (`src/model/scripted.js`) in the golden test. The schedule is the OAG snapshot (Cathay flights, 14 Nov – 31 Dec 2026); fares are illustrative. The knowledge passages are drafts not yet checked against Cathay's pages.

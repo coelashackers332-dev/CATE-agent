@@ -168,7 +168,7 @@ export async function wireApp() {
   // machine, so the adapter uses the local address, not the public one.
   const cathay = (callId) => createCathay({ base: `http://127.0.0.1:${app.address().port}`, callId });
   const knowledge = createKnowledge({ passages: loadPassages(), mode: config.knowledge });
-  const tools = createTools({ cathay, messages, texts, emails, knowledge, baseUrl: config.baseUrl });
+  const tools = createTools({ cathay, messages, texts, knowledge, baseUrl: config.baseUrl });
   const app = createApp({
     tools, startSession: model.startSession, renderTripPage: trip.renderTripPage, notFoundPage: trip.notFoundPage,
     projectorHtml: readFileSync(new URL('./screens/projector.html', import.meta.url), 'utf8'),

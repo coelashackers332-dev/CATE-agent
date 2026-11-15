@@ -2,12 +2,18 @@
 import { test, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 import { store, setOrderStatus } from '../src/store.js';
-import { bus } from '../src/events.js';
+import { bus, emit } from '../src/events.js';
 import { config } from '../src/config.js';
 import { createCathay } from '../src/cathay.js';
 import { createTools } from '../src/tools.js';
 import { handleMockCathay } from '../src/mock-cathay/routes.js';
+import { existsSync as demoFileExists } from 'node:fs';
+const HAS_DEMO = demoFileExists(new URL('../src/model/prompt_demo.js', import.meta.url));   // demo mode is optional
+
+// The full call unless a test asks for the demo one: a PROMPT=demo in .env must not change what these tests check.
+delete process.env.PROMPT;
 
 const BASE_URL = 'https://cate.example';
 let server, base, events, sent, tools, call;
@@ -47,9 +53,6 @@ beforeEach(() => {
       optionsSms: (options, link) => `OPTIONS ${options.map((o) => o.id).join(',')} ${link}`,
       payRequestSms: (order, travellerName) => `PAYREQ ${order.ref} ${travellerName}`,
     },
-    emails: {
-      payEmail: ({ order, travellerName, payerName, payUrl }) => ({ subject: `Pay ${order.ref}`, html: `<p>${payerName}</p>`, text: `${travellerName} ${payUrl}` }),
-    },
     knowledge: { search: async (question, limit) => knowledge(question).slice(0, limit) },
     baseUrl: BASE_URL,
   });
@@ -61,12 +64,23 @@ afterEach(() => bus.off('event', record));
 const PASSAGE = { title: 'Checked baggage', text: 'Economy includes one checked bag.', source: 'https://www.cathaypacific.com/baggage', checked: '2026-11-13', score: 0.9 };
 const knowledge = (question) => (/bag/i.test(question) ? [PASSAGE, PASSAGE, PASSAGE, PASSAGE] : []);
 
-const run = (name, args) => tools.runTool(name, args, call);
+// A confirmed hold needs CATE to have asked the read-back's question out loud first, as Nova reports each sentence it speaks.
+const run = (name, args) => {
+  if (name === 'hold_booking' && args?.caller_confirmed === true) emit(call.id, 'cate_said', { text: 'Shall I hold this booking?' });
+  if (name === 'verify_caller') emit(call.id, 'caller_said', { text: String(args?.code ?? '') });   // he reads the code out
+  return tools.runTool(name, args, call);
+};
 const VANCOUVER = { to: 'Vancouver', after: '2027-02-06', before: '2027-04-05' };
-const verify = () => run('verify_caller', { answer: 'Osaka, last May' });
+// The caller gets the code by email and reads it out: call.sentCode is what the email said.
+const verify = async () => {
+  await run('send_code', {});
+  const result = await run('verify_caller', { code: call.sentCode });
+  sent.sms = sent.sms.filter((m) => !/your code is/.test(m.body));   // the tests below count the messages after verification
+  return result;
+};
 
-test('specs: the 14 tools, each with a description and a JSON Schema', () => {
-  assert.deepEqual(tools.specs.map((s) => s.name), ['verify_caller', 'apply_profile', 'find_flights', 'text_options', 'choose_option', 'set_preferences', 'set_baggage', 'set_special_request', 'set_assistance', 'hold_booking', 'send_pay_link', 'find_booking', 'change_booking', 'ask_cathay']);
+test('specs: the 16 tools, each with a description and a JSON Schema', () => {
+  assert.deepEqual(tools.specs.map((s) => s.name), ['send_code', 'verify_caller', 'apply_profile', 'find_flights', 'text_options', 'choose_option', 'set_preferences', 'set_baggage', 'set_special_request', 'keep_as_last_time', 'set_assistance', 'hold_booking', 'send_pay_link', 'find_booking', 'change_booking', 'ask_cathay']);
   for (const s of tools.specs) {
     assert.ok(s.description.length > 40, s.name);
     assert.equal(s.inputSchema.type, 'object');
@@ -109,7 +123,7 @@ test('golden path: verify → profile → flights → text → assistance → ho
   assert.equal((await run('text_options', { phone: '+85212345678' })).ok, true);
   const link = `${BASE_URL}/v/${call.pageCode}`;
   assert.deepEqual(sent.sms, [{ to: wong.phone, body: `OPTIONS 1,2,3 ${link}` }]);
-  assert.deepEqual(store.pages.get(call.pageCode), { member_id: 'DEMO-0001', options: found.options, ref: null, expires: '2027-04-02' });
+  assert.deepEqual(store.pages.get(call.pageCode), { member_id: 'DEMO-0001', options: found.options, ref: null, expires: '2027-04-02', summary: null });
 
   // 5. his answers, one tool each: every result says the answer back and gives the one next question
   const chosen = await run('choose_option', { option_id: '1' });
@@ -170,9 +184,9 @@ test('golden path: verify → profile → flights → text → assistance → ho
   // events: one tool_call + one tool_result per run, system lines from the adapter, screens from the tools
   const kinds = (k) => events.filter((e) => e.kind === k);
   assert.equal(kinds('tool_call').length, kinds('tool_result').length);
-  assert.equal(kinds('tool_call').length, 14);
-  assert.deepEqual(kinds('tool_call')[3].args, {}, 'undeclared inputs are dropped');
-  assert.deepEqual(kinds('screen').map((e) => e.what), ['tier', 'sms', 'options_page', 'sms']);
+  assert.equal(kinds('tool_call').length, 15, 'send_code added the first call');
+  assert.deepEqual(kinds('tool_call')[4].args, {}, 'undeclared inputs are dropped');
+  assert.deepEqual(kinds('screen').map((e) => e.what), ['code', 'tier', 'sms', 'options_page', 'sms']);
   assert.ok(events.every((e) => e.call_id === 'c1'));
   assert.ok(kinds('system').some((e) => e.summary === 'K7Q2XM · WCHR'));
   const text = JSON.stringify(events);
@@ -232,25 +246,42 @@ test('nothing about the member before verification', async () => {
   assert.equal(sent.sms.length + sent.email.length, 0);
 });
 
-test('a wrong answer does not verify, tells the model nothing, and three wrong answers end it', async () => {
+test('a wrong code does not verify, tells the model nothing, and three wrong codes end it', async () => {
+  assert.equal((await run('verify_caller', { code: '123456' })).verified, false, 'no code sent yet: nothing to check');
+  const sent = await run('send_code', {});
+  assert.equal(sent.ok, true);
+  assert.ok(!JSON.stringify(sent).includes(call.sentCode), 'the model never sees the code');
+  assert.equal((await run('verify_caller', { code: '12' })).verified, false, 'too short: asked again, not counted');
   for (let i = 0; i < 3; i += 1) {
-    const result = await run('verify_caller', { answer: 'Tokyo, in March' });
+    const result = await run('verify_caller', { code: call.sentCode === '000000' ? '111111' : '000000' });
     assert.equal(result.ok, false);
     assert.equal(result.verified, false);
   }
   assert.equal(call.verified, false);
   assert.equal(call.token, null);
-  assert.ok(!/osaka|may|wong/i.test(JSON.stringify(events.filter((e) => e.kind === 'tool_result'))), 'no hint of the right answer or the member');
-  const locked = await run('verify_caller', { answer: 'Osaka, last May' });
-  assert.equal(locked.verified, false);
+  assert.ok(!/osaka|may|wong/i.test(JSON.stringify(events.filter((e) => e.kind === 'tool_result'))), 'no hint of the member');
+  const locked = await run('verify_caller', { code: call.sentCode });
+  assert.equal(locked.verified, false, 'locked after three wrong codes, even with the right one');
   assert.equal((await run('apply_profile', {})).ok, false);
 });
 
-test('an unknown calling number cannot verify', async () => {
+test('the code goes by text-as-email to the number on file, read with spaces, and works only once', async () => {
+  await run('send_code', {});
+  const msg = sent.sms.at(-1);
+  assert.ok(msg, 'one message sent');
+  assert.ok(msg.body.includes(`${call.sentCode.slice(0, 3)} ${call.sentCode.slice(3)}`));
+  assert.equal((await run('verify_caller', { code: call.sentCode.split('').join(' ') })).verified, true, 'spoken digits with spaces pass');
+  call = newCall('c2');
+  call.codesSent = 1;   // pretend a code went out, but use the old one
+  assert.equal((await run('verify_caller', { code: '000000' })).verified, false);
+});
+
+test('an unknown calling number gets no code and cannot verify', async () => {
   call = newCall('c9', '+85299999999');
-  const result = await run('verify_caller', { answer: 'Osaka, last May' });
-  assert.equal(result.verified, false);
+  const result = await run('send_code', {});
+  assert.equal(result.ok, false);
   assert.equal(call.memberId, null);
+  assert.equal((await run('verify_caller', { code: '123456' })).verified, false);
 });
 
 test('hold_booking without a read-back confirmation creates nothing', async () => {
@@ -326,7 +357,6 @@ test('runTool never throws: an unknown tool or a broken system comes back in pla
     cathay: (callId) => createCathay({ base, callId }),
     messages: { sendSms: async () => { throw new Error('carrier down +85200000001'); } },
     texts: { optionsSms: () => 'x' },
-    emails: {},
     baseUrl: BASE_URL,
   });
   const result = await broken.runTool('text_options', {}, call);
@@ -450,7 +480,7 @@ const CHAN = '+85200000003';   // seeded Green member, no assistance need, last 
 
 test('tier gate: a Green member without an assistance need is refused after verification, and gets nothing', async () => {
   call = newCall('c1', CHAN);
-  const result = await run('verify_caller', { answer: 'Taipei' });
+  const result = await verify();
   assert.equal(result.ok, false);
   assert.equal(result.verified, false);
   assert.match(result.error, /Gold members and above/);
@@ -463,7 +493,7 @@ test('tier gate: a Green member without an assistance need is refused after veri
 test('tier gate: a Green member with a registered assistance need gets CATE; Gold always does', async () => {
   store.members[1].needs.long_distance = false;   // Ms Chan registers that she cannot walk long distances
   call = newCall('c1', CHAN);
-  assert.equal((await run('verify_caller', { answer: 'Taipei' })).verified, true);
+  assert.equal((await verify()).verified, true);
   call = newCall('c2');
   assert.equal((await verify()).verified, true);
   const profile = await run('apply_profile', {});
@@ -583,7 +613,7 @@ test('change booking: another member\'s booking, or a flight to another city, ca
   const ref = await bookedAndPaid('1');
   call = newCall('c3', CHAN);
   store.members[1].needs.long_distance = false;
-  await run('verify_caller', { answer: 'Taipei' });
+  await verify();
   assert.deepEqual((await run('find_booking', {})).bookings, []);
   assert.match((await run('change_booking', { ref, meal: 'vegan' })).error, /not one of his bookings/);
   call = newCall('c4');
@@ -591,4 +621,149 @@ test('change booking: another member\'s booking, or a flight to another city, ca
   await run('find_booking', {});
   await run('find_flights', { to: 'Osaka', after: '2026-12-25', before: '2027-01-01' });
   assert.match((await run('change_booking', { ref, option_id: '1' })).error, /not to Vancouver/);
+});
+
+test('find_flights offers 3 options when 3 or more fit, even on a route with one flight a day', async () => {
+  await verify();
+  const r = await run('find_flights', { to: 'Hanoi', after: '2026-11-16', before: '2026-11-20' });
+  assert.equal(r.ok, true);
+  assert.equal(r.options.length, 3);
+  assert.equal(new Set(r.options.map((o) => o.out.flight + o.out.dep)).size, 3, 'three different departures');
+  assert.ok(r.options.every((o) => o.out.arr < o.back.dep), 'each one is back in time for the return flight');
+});
+
+test('a yes said over an unfinished read-back holds nothing; after the question it does', async () => {
+  await verify();
+  await run('find_flights', VANCOUVER);
+  await run('choose_option', { option_id: '1' });
+  await run('set_preferences', { seat_ok: true, meal_ok: true });
+  await run('set_assistance', { same_as_last_trip: true });
+  await run('set_baggage', { extra_bags: 0 });
+  await run('set_special_request', { none: true });
+  assert.equal((await run('hold_booking', {})).needs_confirmation, true);
+  emit(call.id, 'cate_said', { text: 'Let me read it all back to you. Nothing is booked until you say yes.' });
+  const early = await tools.runTool('hold_booking', { caller_confirmed: true }, call);   // "yes" over the read-back
+  assert.equal(early.ok, false);
+  assert.match(early.error, /before he heard the whole read-back/);
+  assert.equal(call.ref ?? null, null, 'nothing held');
+  emit(call.id, 'cate_said', { text: 'Shall I hold this booking?' });
+  const held = await tools.runTool('hold_booking', { caller_confirmed: true }, call);
+  assert.equal(held.status, 'held');
+});
+
+test('PROMPT=demo (optional): one yes keeps everything as last time, and the booking is checked on the trip page, not read out', { skip: !HAS_DEMO && 'no src/model/prompt_demo.js' }, async () => {
+  const before = process.env.PROMPT;
+  process.env.PROMPT = 'demo';
+  try {
+    await verify();
+    const found = await run('find_flights', VANCOUVER);
+    assert.match(found.next, /say only the first read_out sentence/);
+    await run('text_options', {});
+    const chosen = await run('choose_option', { option_id: '1' });
+    assert.match(chosen.next, /"Same as last time\? Window seat, vegetarian meal, wheelchair to the gate, no extra bags\."/);
+    assert.match(chosen.next, /call keep_as_last_time/);
+    assert.doesNotMatch(chosen.next, /^Say:/, 'no sentence said back after each answer');
+    const kept = await run('keep_as_last_time', {});
+    assert.equal(kept.code, 'WCHR');
+    assert.match(kept.next, /call hold_booking now/);
+    const hold = await run('hold_booking', {});
+    assert.equal(hold.on_trip_page, true);
+    assert.match(hold.readback, /on your trip page now.*Shall I hold this booking\?$/);
+    assert.equal(hold.short_readback, undefined, 'no spoken summary for the model to read out instead');
+    const card = store.pages.get(call.pageCode).summary;
+    assert.equal(card.out.flight, 'CX0V1');
+    assert.equal(card.help, 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat.');
+    assert.equal(card.extra_bags, 0);
+    assert.equal(card.total_hkd, 8420);
+    assert.equal((await run('hold_booking', { caller_confirmed: true })).status, 'held');
+    assert.equal(store.pages.get(call.pageCode).summary, null, 'once held, the page shows the held booking instead');
+  } finally {
+    if (before === undefined) delete process.env.PROMPT; else process.env.PROMPT = before;
+  }
+});
+
+test('exact days: "Milan on the 16th for five days" leaves on the 16th and comes back on the 21st, never the same day', async () => {
+  await verify();
+  const r = await run('find_flights', { to: 'Milan', depart_on: '2026-11-16', return_on: '2026-11-21' });
+  assert.equal(r.ok, true);
+  assert.equal(r.options[0].out.dep.slice(0, 10), '2026-11-16', 'the day he named comes first');
+  assert.equal(r.options[0].back.dep.slice(0, 10), '2026-11-21', 'back on the day he named');
+  assert.equal(r.options.length, 1, 'one flight on the 16th: that one is offered, not other days');
+  assert.equal(r.on_day_asked, true);
+  assert.match(r.next, /Then ask if that flight suits him; on a yes, call choose_option with option 1\./);
+  for (const o of r.options) assert.ok(o.back.dep.slice(0, 10) > o.out.arr.slice(0, 10), `${o.out.dep}: at least one night there`);
+  assert.equal((await run('find_flights', { to: 'Milan', depart_on: '2026-11-21', return_on: '2026-11-16' })).ok, false, 'back before he leaves is refused');
+});
+
+test('window search: every option has its own return flight at least one night after it lands', async () => {
+  await verify();
+  const r = await run('find_flights', { to: 'Milan', after: '2026-11-16', before: '2026-11-21' });
+  for (const o of r.options) assert.ok(o.back.dep.slice(0, 10) > o.out.arr.slice(0, 10), `${o.out.dep} → ${o.back.dep}: no same-day return`);
+});
+
+test('exact days, every route: only flights on the day asked (up to 3), back on the day asked, at least one night; nearest days only when that day has none', async () => {
+  const flights = JSON.parse(readFileSync(new URL('../data/flights.json', import.meta.url), 'utf8'));
+  const fares = JSON.parse(readFileSync(new URL('../data/fares.json', import.meta.url), 'utf8'));
+  const priced = new Set(fares.map((f) => `${f.flight} ${f.date}`));
+  const depart = '2026-11-20';
+  const ret = '2026-11-25';
+  const cities = ['Tokyo', 'London', 'Sydney', 'Bangkok', 'Singapore', 'Taipei', 'Osaka', 'Seoul', 'Manila', 'Milan', 'New York', 'Paris', 'Hanoi', 'Melbourne'];
+  await verify();
+  let checked = 0;
+  for (const city of cities) {
+    const r = await run('find_flights', { to: city, depart_on: depart, return_on: ret });
+    if (!r.ok) continue;   // a route with no flights near those days is told so; nothing to check here
+    checked += 1;
+    const code = r.options[0].out.to;
+    const onDay = flights.filter((f) => f.from === 'HKG' && f.to === code && f.dep.startsWith(depart) && priced.has(`${f.flight} ${depart}`));
+    if (onDay.length) {
+      assert.equal(r.on_day_asked, true, city);
+      assert.ok(r.options.every((o) => o.out.dep.startsWith(depart)), `${city}: only the day asked`);
+      assert.ok(r.options.length >= 1 && r.options.length <= Math.min(3, onDay.length), `${city}: ${r.options.length} options, ${onDay.length} that day`);
+    } else {
+      assert.equal(r.on_day_asked, false, city);
+      assert.match(r.next, /There is no flight on Friday 20 November/, city);
+    }
+    for (const o of r.options) {
+      assert.ok(o.back.dep.slice(0, 10) > o.out.arr.slice(0, 10), `${city} ${o.out.dep}: at least one night`);
+      assert.ok(Math.abs(Date.parse(o.back.dep.slice(0, 10)) - Date.parse(ret)) <= 2 * 864e5, `${city}: back near the day asked`);
+    }
+  }
+  assert.ok(checked >= 10, `checked ${checked} routes`);
+});
+
+test('a code the caller never read out is not checked and costs no try', async () => {
+  await run('send_code', {});
+  const invented = await tools.runTool('verify_caller', { code: '123456' }, call);   // no caller_said since the code went out
+  assert.equal(invented.verified, false);
+  assert.match(invented.error, /has not read out a code yet/);
+  assert.equal(call.verifyFails ?? 0, 0, 'not counted as a wrong try');
+  assert.equal((await run('verify_caller', { code: call.sentCode })).verified, true);
+});
+
+test('exact days: a day to leave but no stay length asks "How many days will you stay?", not a list of dates', async () => {
+  await verify();
+  const r = await run('find_flights', { to: 'Taipei', depart_on: '2026-11-16' });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /How many days will you stay\?/);
+  assert.doesNotMatch(r.error, /We fly to/);
+});
+
+test('PROMPT=demo (optional): a quick "yes" over the hold question counts once CATE has started it; the full call keeps the strict rule', { skip: !HAS_DEMO && 'no src/model/prompt_demo.js' }, async () => {
+  const before = process.env.PROMPT;
+  process.env.PROMPT = 'demo';
+  try {
+    await verify();
+    await run('find_flights', VANCOUVER);
+    await run('text_options', {});
+    await run('choose_option', { option_id: '1' });
+    await run('keep_as_last_time', {});
+    await run('hold_booking', {});
+    const tooSoon = await tools.runTool('hold_booking', { caller_confirmed: true }, call);   // before CATE said a word of it
+    assert.equal(tooSoon.ok, false);
+    emit(call.id, 'cate_said', { text: 'Everything is on your trip page now' });            // he talks over the rest
+    assert.equal((await tools.runTool('hold_booking', { caller_confirmed: true }, call)).status, 'held');
+  } finally {
+    if (before === undefined) delete process.env.PROMPT; else process.env.PROMPT = before;
+  }
 });

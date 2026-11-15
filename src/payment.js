@@ -8,13 +8,14 @@ import { methodLabel, renderPayPage, renderPaidPage } from './screens/pay.js';
 const MAX_FORM = 2048;   // the pay form sends one short field
 const PRIVATE = { 'X-Robots-Tag': 'noindex', 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' };
 
-/** An HTML page with a fresh CSP nonce: only the page's own style and script run, and no other site can frame it. */
+/** An HTML page with a fresh CSP nonce: only the page's own style and script run, and no other site can frame it.
+ * Our own site may: the projector shows his phone, and the phone's trip page turns into this pay page once held. */
 function sendPage(res, status, render) {
   const nonce = randomBytes(16).toString('base64');
   res.writeHead(status, {
-    'Content-Type': 'text/html; charset=utf-8', ...PRIVATE, 'X-Frame-Options': 'DENY',
+    'Content-Type': 'text/html; charset=utf-8', ...PRIVATE, 'X-Frame-Options': 'SAMEORIGIN',
     'Content-Security-Policy': `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; `
-      + "form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+      + "form-action 'self'; frame-ancestors 'self'; base-uri 'none'",
   }).end(render(nonce));
 }
 

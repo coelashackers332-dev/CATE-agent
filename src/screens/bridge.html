@@ -16,7 +16,8 @@
   select, button { font: inherit; width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); }
   .row { display: flex; gap: 12px; margin-top: 24px; }
   button { cursor: pointer; font-weight: 600; }
-  #start { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #start, #arm { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #arm.on { background: transparent; color: var(--accent); }
   #end { border-color: var(--bad); color: var(--bad); }
   button:disabled { opacity: .4; cursor: default; }
   #status { margin-top: 24px; font-weight: 600; min-height: 1.5em; }
@@ -26,13 +27,18 @@
 <body>
 <main>
   <h1>CATE phone bridge</h1>
-  <p class="hint">Answer the call in Phone Link first, then press Start. Laptop only. Use Chrome.</p>
+  <p class="hint">Hands-free: press <b>Answer automatically</b> once, before the demo. From then on CATE picks up every call
+    by itself as soon as call audio arrives, and hangs up after 30 seconds of dead line. Or answer the call yourself and press Start.
+    Laptop only. Use Chrome.</p>
 
-  <label for="in">Call audio in (Phone Link output, e.g. CABLE Output)</label>
+  <label for="in">Call audio in (the call app's output, e.g. BlackHole 2ch)</label>
   <select id="in"></select>
-  <label for="out">CATE's voice out (Phone Link mic, e.g. Hi-Fi Cable Input)</label>
+  <label for="out">CATE's voice out (the call app's microphone, e.g. BlackHole 16ch)</label>
   <select id="out"></select>
 
+  <div class="row">
+    <button id="arm">Answer automatically</button>
+  </div>
   <div class="row">
     <button id="start">Start call</button>
     <button id="end" disabled>End call</button>
@@ -76,7 +82,25 @@ registerProcessor('playback', Playback);`;
 const $ = (id) => document.getElementById(id);
 const key = new URLSearchParams(location.search).get('key') ?? '';
 const status = (text) => { $('status').textContent = text; };
-let ctx = null, stream = null, ws = null;
+let ctx = null, stream = null, ws = null, playback = null;
+
+// Hands-free answering. No call: the cable carries digital silence (exact zeros). A call: there is sound on it.
+// 'off' = nothing open; 'armed' = listening for a call; 'live' = on a call; 'settle' = after a call, waiting for the line to go quiet.
+const HEARD = 4;             // RMS (of 32767) that counts as call audio: any real signal; no call is exact zeros
+const PICK_UP = 3;           // frames of sound (20 ms each) before CATE answers: 0.06 s
+const DEAD_LINE = 1500;      // frames of digital silence on a live call before CATE hangs up: 30 s
+const QUIET = 100;           // frames of silence after a call before the next call can start: 2 s
+let auto = false, state = 'off', heard = 0, silent = 0;
+const TRIGGER = new URLSearchParams(location.search).get('trigger') === 'audio' ? 'audio' : 'watcher';
+
+/** The auto-answer watcher clicked Answer: CATE starts now. The watcher's JavaScript runs in Brave's isolated world,
+ * which shares the page but not its variables, so it signals with a DOM event ('cate-answered') instead of a call. */
+window.cateAnswered = () => {
+  if (!auto || state === 'live') return 'not armed';
+  connect();
+  return 'started';
+};
+document.addEventListener('cate-answered', () => window.cateAnswered());
 
 function remember(sel, name) {
   let saved = null;
@@ -95,62 +119,114 @@ async function listDevices() {
   }
 }
 
+function buttons() {
+  $('start').disabled = state === 'live' || auto;
+  $('end').disabled = state !== 'live';
+  $('arm').textContent = auto ? 'Stop answering automatically' : 'Answer automatically';
+  $('arm').classList.toggle('on', auto);
+}
+
+/** Closes everything: the call and the audio. */
 function stop(text) {
-  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  hangUp();
   stream?.getTracks().forEach((t) => t.stop());
   ctx?.close();
-  ctx = stream = null;
-  $('start').disabled = false;
-  $('end').disabled = true;
+  ctx = stream = playback = null;
+  auto = false; state = 'off';
   $('level').value = 0;
+  buttons();
   status(text);
+}
+
+/** Ends the call only. Hands-free, the audio stays open and the bridge waits for the next call. */
+function hangUp() {
+  if (ws) { ws.onclose = null; ws.close(); ws = null; }
+  playback?.port.postMessage('clear');
+  if (auto) { state = 'settle'; silent = 0; status('Call ended. Waiting for the line to go quiet, then for the next call.'); }
+  else if (state === 'live') state = 'off';
+  buttons();
+}
+
+/** Opens the cable audio once. It must start from a click: browsers keep audio off until then. */
+async function openAudio() {
+  if (ctx) return;
+  await devicesReady;   // the device lists must be filled before a device is picked
+  ctx = new AudioContext({ sampleRate: 8000, latencyHint: 'interactive' });
+  await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' })));
+  if ($('out').value) await ctx.setSinkId($('out').value);
+  stream = await navigator.mediaDevices.getUserMedia({ audio: {
+    deviceId: { exact: $('in').value }, channelCount: 1,
+    // The cables carry clean digital audio; browser processing would clip the start of words.
+    echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+  } });
+  const capture = new AudioWorkletNode(ctx, 'capture');
+  playback = new AudioWorkletNode(ctx, 'playback', { outputChannelCount: [1] });
+  const mute = ctx.createGain();
+  mute.gain.value = 0;   // keeps the capture node running without playing the caller back to them
+  ctx.createMediaStreamSource(stream).connect(capture).connect(mute).connect(ctx.destination);
+  playback.connect(ctx.destination);
+  capture.port.onmessage = (e) => onFrame(e.data);
+}
+
+function onFrame(pcm) {
+  let sum = 0;
+  for (const s of pcm) sum += s * s;
+  const rms = Math.sqrt(sum / pcm.length);
+  $('level').value = Math.min(1, rms / 8000);
+  if (state === 'live') {
+    if (ws?.readyState === WebSocket.OPEN) ws.send(pcm.buffer);
+    silent = rms < 1 ? silent + 1 : 0;
+    if (auto && silent >= DEAD_LINE) hangUp();
+  } else if (state === 'armed') {
+    // The FaceTime ringtone also plays into the cable, so sound alone could start CATE before anyone answers.
+    // With the auto-answer watcher, the start comes from cateAnswered() below; ?trigger=audio brings back the sound trigger.
+    heard = rms > HEARD ? heard + 1 : 0;
+    if (TRIGGER === 'audio' && heard >= PICK_UP) connect();
+  } else if (state === 'settle') {
+    silent = rms < 1 ? silent + 1 : 0;
+    if (silent >= QUIET) { state = 'armed'; heard = 0; status(TRIGGER === 'audio' ? 'Waiting for a call: CATE answers by itself.' : 'Waiting for a call: CATE starts when the call is answered.'); }
+  }
+}
+
+/** Starts the call on the server: CATE greets the caller a few seconds later. */
+function connect() {
+  state = 'live'; silent = 0; heard = 0;
+  buttons();
+  status('Call coming in: connecting CATE…');
+  ws = new WebSocket(`ws://${location.host}/local/stream?key=${encodeURIComponent(key)}`);
+  ws.binaryType = 'arraybuffer';
+  // The line starts a call on {"event":"start"}, not on the connection itself (src/phone.js).
+  ws.onopen = () => { ws.send('{"event":"start"}'); status('On the call: CATE is listening'); };
+  ws.onclose = () => { ws = null; if (auto) hangUp(); else stop('Call ended. Hang up on the call app if the caller has not.'); };
+  ws.onmessage = (e) => {
+    if (e.data instanceof ArrayBuffer) return playback?.port.postMessage(new Int16Array(e.data));
+    const msg = JSON.parse(e.data);
+    if (msg.event === 'clear') playback?.port.postMessage('clear');
+    if (msg.event === 'busy') { ws.onclose = null; ws.close(); ws = null; if (auto) hangUp(); else stop('CATE is already on a call. Reset first (POST /reset).'); }
+  };
 }
 
 async function start() {
   $('start').disabled = true;
   status('Starting…');
-  try {
-    ctx = new AudioContext({ sampleRate: 8000, latencyHint: 'interactive' });
-    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET], { type: 'text/javascript' })));
-    if ($('out').value) await ctx.setSinkId($('out').value);
-    stream = await navigator.mediaDevices.getUserMedia({ audio: {
-      deviceId: { exact: $('in').value }, channelCount: 1,
-      // The cables carry clean digital audio; browser processing would clip the start of words.
-      echoCancellation: false, noiseSuppression: false, autoGainControl: false,
-    } });
-    const capture = new AudioWorkletNode(ctx, 'capture');
-    const playback = new AudioWorkletNode(ctx, 'playback', { outputChannelCount: [1] });
-    const mute = ctx.createGain();
-    mute.gain.value = 0;   // keeps the capture node running without playing the caller back to them
-    ctx.createMediaStreamSource(stream).connect(capture).connect(mute).connect(ctx.destination);
-    playback.connect(ctx.destination);
-
-    ws = new WebSocket(`ws://${location.host}/local/stream?key=${encodeURIComponent(key)}`);
-    ws.binaryType = 'arraybuffer';
-    // The line starts a call on {"event":"start"}, not on the connection itself (src/phone.js).
-    ws.onopen = () => { ws.send('{"event":"start"}'); status('On the call: CATE is listening'); $('end').disabled = false; };
-    ws.onclose = () => stop('Call ended. Hang up in Phone Link if the caller has not.');
-    ws.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) return playback.port.postMessage(new Int16Array(e.data));
-      const msg = JSON.parse(e.data);
-      if (msg.event === 'clear') playback.port.postMessage('clear');
-      if (msg.event === 'busy') stop('CATE is already on a call. Reset first (POST /reset).');
-    };
-    capture.port.onmessage = (e) => {
-      const pcm = e.data;
-      let sum = 0;
-      for (const s of pcm) sum += s * s;
-      $('level').value = Math.min(1, Math.sqrt(sum / pcm.length) / 8000);
-      if (ws?.readyState === WebSocket.OPEN) ws.send(pcm.buffer);
-    };
-  } catch (err) {
-    stop(`Could not start: ${err.message}`);
-  }
+  try { await openAudio(); connect(); } catch (err) { stop(`Could not start: ${err.message}`); }
 }
 
+async function arm() {
+  if (auto) return stop('Not answering automatically. Not on a call.');
+  try {
+    await openAudio();
+    auto = true; state = 'settle'; silent = 0;
+    buttons();
+    status('Getting ready: waiting for the line to be quiet…');
+  } catch (err) { stop(`Could not start: ${err.message}`); }
+}
+
+$('arm').onclick = arm;
 $('start').onclick = start;
-$('end').onclick = () => stop('Call ended. Hang up in Phone Link.');
-listDevices().catch((err) => status(`Could not list audio devices: ${err.message}`));
+$('end').onclick = () => (auto ? hangUp() : stop('Call ended. Hang up on the call app.'));
+buttons();
+const devicesReady = listDevices().catch((err) => status(`Could not list audio devices: ${err.message}`));
 </script>
 </body>
 </html>

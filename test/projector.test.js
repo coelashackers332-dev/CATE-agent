@@ -94,3 +94,14 @@ test('T swaps the phone for the systems log, and back', () => {
   p.press('T');
   assert.equal(p.body.classList.contains('tech'), false);
 });
+
+test('a flight chosen by voice or by tap shows on the phone at once; a refused answer changes nothing', () => {
+  const p = boot();
+  p.send(texted('http://localhost:8080/v/good'));
+  const result = (name, ok) => p.send({ kind: 'tool_result', call_id: 'c1', name, result: ok ? { ok: true } : { ok: false, error: 'no' } });
+  result('choose_option', true);
+  assert.deepEqual(p.els.phone.loads, ['/v/good', '/v/good'], 'reloaded for the choice');
+  result('choose_option', false);
+  result('set_assistance', true);
+  assert.equal(p.els.phone.loads.length, 2, 'no reload for a refused choice or an answer the page does not show');
+});

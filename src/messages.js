@@ -170,7 +170,10 @@ export function createMessages({ mode = config.messages, email = emailFromEnv(),
         if (texts === 'email') {
           if (!inbox) throw new Error('no email address on file for that number');
           // The same words as the text, plain and laid out; its first line ("Cathay CATE: booked. Ref ...") is the subject.
-          await mail(inbox, String(body).split('\n')[0], textAsEmail(body), body);
+          // The time makes each subject unique: with one subject Gmail stacks the texts into one conversation and hides
+          // what repeats (the trip link button) behind "•••".
+          const at = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Hong_Kong', hour: '2-digit', minute: '2-digit' }).format(new Date());
+          await mail(inbox, `${String(body).split('\n')[0]} (${at})`, textAsEmail(body), body);
         } else {
           throw new Error('there is no SMS sender: set TEXTS=email');
         }

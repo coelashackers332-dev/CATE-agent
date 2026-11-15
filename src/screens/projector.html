@@ -137,7 +137,9 @@
     add(log, row);
   }
   const mark = (ok) => (ok === false ? '✗ ' : ok === true ? '✓ ' : '');
-  const SCREENS = { options_page: 'Trip page', pay_email: 'Pay email', pay_page: 'Pay page', sms: 'Text message', knowledge: 'Cathay knowledge', tier: 'Membership tier', request: 'Special request' };
+  const SCREENS = { options_page: 'Trip page', pay_email: 'Pay email', pay_page: 'Pay page', sms: 'Text message', knowledge: 'Cathay knowledge', tier: 'Membership tier', request: 'Special request', code: 'Code email' };
+  // Tools whose result changes what his trip page shows.
+  const PAGE_TOOLS = new Set(['choose_option', 'hold_booking', 'change_booking', 'send_pay_link']);
 
   // Whatever address an event carries, only a trip page's path is kept, so the phone always loads from this server.
   function tripPath(url) {
@@ -188,6 +190,8 @@
       case 'tool_result': {
         const ok = !(ev.result && ev.result.ok === false);
         line('tool', 'tool ' + ev.name, '', mark(ok) + (brief(ok ? ev.result : ev.result.error) || 'done'), ok);
+        // An answer that changes his trip page (a flight chosen by voice or by tap): the phone shows it at once.
+        if (ok && trip && PAGE_TOOLS.has(ev.name)) phone.src = trip;
         break;
       }
       case 'screen':

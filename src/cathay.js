@@ -56,8 +56,14 @@ export function createCathay({ base = `http://127.0.0.1:${config.port}`, callId 
       return { result: { member_id }, summary: `✓ member found (${member_id})` };
     }),
 
-    /** → { ok, token? }. The answer is compared inside Cathay's system; the right answer never comes back. */
-    checkVerification: (memberId, answer) => step('Membership', `verify "${String(answer ?? '').slice(0, 40)}"`, async () => {
+    /** → { code }. A one-time code for this member, for our code to email to the address on file. Never shown on the projector. */
+    sendCode: (memberId) => step('Membership', 'one-time code', async () => {
+      const { code } = need(await http('POST', '/membership/otp', { body: { member_id: memberId, call_id: callId } }));
+      return { result: { code }, summary: '✓ 6-digit code issued' };
+    }),
+
+    /** → { ok, token? }. The answer (or one-time code) is compared inside Cathay's system; the right one never comes back. */
+    checkVerification: (memberId, answer) => step('Membership', /^\d{6}$/.test(String(answer ?? '')) ? 'verify one-time code' : `verify "${String(answer ?? '').slice(0, 40)}"`, async () => {
       const { ok, token } = need(await http('POST', '/membership/verify', { body: { member_id: memberId, answer, call_id: callId } }));
       return ok ? { result: { ok: true, token }, summary: '✓ passed' } : { result: { ok: false }, ok: false, summary: '✗ did not match' };
     }),

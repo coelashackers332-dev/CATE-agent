@@ -17,7 +17,6 @@ function plain(s) {
 
 const hkd = (n) => `HKD ${Number(n)}`;
 const when = (seg) => `${fmtDay(seg?.dep, true)} ${fmtTime(seg?.dep)}`.trim();
-const lower = (s) => String(s ?? '').toLowerCase();
 
 /** Text 1, to the traveller during the call: the options in short form + the trip-page link. */
 export function optionsSms(options, link) {

@@ -14,7 +14,7 @@ Built for **Cathay Hackathon 2026**, theme *Premium Travel*, by team **E332 Coel
 
 The demo follows Mr Wong, a Gold member who flew to Osaka in May with a wheelchair to the gate:
 
-1. **Verify and check the tier.** Mr Wong calls from his own phone. CATE matches the caller ID to his membership and asks one question from his travel history: "Where did you last fly with us?" CATE serves Gold members and above, and any member with a registered assistance need.
+1. **Verify and check the tier.** Mr Wong calls from his own phone. CATE matches the caller ID to his membership and, as the call starts, emails a six-digit one-time code to the address on file; he reads it out. CATE serves Gold members and above, and any member with a registered assistance need.
 2. **Which service?** Book a flight, change a booking (dates, seat, meal, baggage), or a special request.
 3. **Say the trip.** "Osaka again, after Christmas, back before New Year."
 4. **Options.** CATE reads up to 3 options from the schedule, ranked by his profile (he never leaves before 9:00), and emails one link to his trip page, where he can tap the option he wants.
@@ -32,28 +32,32 @@ The voice model only listens, talks and chooses which tool to call. Every action
 - **Seats, meals, baggage and fees** come from fixed lists and the Orders system; a seat number must exist on our planes.
 - **Flights and fares** come from our data. The model can't invent a flight or a price.
 - **Wheelchair codes** come from a fixed rule table, not from the model's judgement.
-- **Nothing about the member** reaches the model before verification passes, and the model never sees the correct verification answer.
+- **Nothing about the member** reaches the model before verification passes. The model never sees the one-time code or the email address it goes to, and a code the model makes up is refused.
+- **Consent:** a booking is held only after the caller has heard the read-back up to "Shall I hold this booking?" and said yes.
 - **General Cathay answers** come only from checked passages, each with its source. With no relevant passage, CATE says it does not have that information and offers a member of staff.
 
-The 14 tools, with their inputs, results and rules, are documented in [`docs/TOOLS.md`](docs/TOOLS.md).
+The 16 tools, with their inputs, results and rules, are documented in [`docs/TOOLS.md`](docs/TOOLS.md). How the code fits together, file by file: [`docs/CODE.md`](docs/CODE.md).
 
 ## Architecture
 
 ```
-Caller's phone ──► standby phone (the number Mr Wong calls)
-                     │ Bluetooth: the call's audio
+Caller's phone ──► the phone line (prototype: FaceTime Audio on the demo Mac, see below)
+                     │ call audio, through virtual audio cables
                      ▼
-                  audio bridge on the laptop
+                  audio bridge on the laptop (the /bridge page)
                      │ WebSocket /local/stream: 8 kHz PCM16 both ways
                      ▼
                   CATE server (Node.js, on the same laptop)
-                    ├─ tools: verify_caller · apply_profile · find_flights · set_assistance
-                    │         hold_booking · text_options · send_pay_link
+                    ├─ 16 tools: send_code · verify_caller · apply_profile · find_flights · choose_option ·
+                    │   set_preferences · keep_as_last_time · set_assistance · set_baggage · set_special_request ·
+                    │   hold_booking · text_options · send_pay_link · find_booking · change_booking · ask_cathay
                     ├─ cathay.js ──► mock Cathay systems (Membership · Orders · Schedule)
                     ├─ trip pages (view-only links) · projector view
                     │
                     └─ two-way audio stream ──► Amazon Bedrock: Nova 2 Sonic (speech to speech)
 ```
+
+**The phone line in this prototype.** CATE is built for an ordinary phone call: any phone, no app. At the hackathon we could not run a public phone number (no hosted server was allowed, and a telephony provider could not be set up in time), so for the demo the call reaches CATE through FaceTime Audio on a Mac: the call's audio goes through virtual audio cables (BlackHole) into the `/bridge` page, and a small script on the demo Mac answers the call and tells the bridge to start. Everything after the audio (the phone line `/local/stream`, Nova 2 Sonic, the tools and the Cathay systems) is the code a real phone number would use; in production, FaceTime is replaced by a telephony line and nothing else changes. Trip and pay links reach the caller's phone through a tunnel to the laptop.
 
 **Mocked for the demo.** We have no access to Cathay's systems, so the server includes mock Membership, Orders and Schedule systems behind one adapter (`src/cathay.js`). Their operations are modelled on public IATA NDC message names (`OrderCreate`, `AirShopping`). In production, that adapter points at Cathay's membership and booking systems and nothing else changes. Flight schedules are a real Cathay schedule snapshot (OAG, November–December 2026); the demo flights in February–March 2027 are placeholders. Fares are illustrative. Payment is a demo pay page; no money moves.
 
@@ -82,15 +86,15 @@ Caller's phone ──► standby phone (the number Mr Wong calls)
 CONTRACTS.md          interfaces between modules (read before writing code)
 CLAUDE.md             working rules for this repo
 data/                 seed data for the mock Cathay systems (JSON)
-docs/                 TOOLS.md (the 8 tools)
+docs/                 CODE.md (how the code works, file by file) · TOOLS.md (the 16 tools)
 src/server.js         HTTP routes, projector feed, wiring
-src/phone.js          the phone line: call audio from the Bluetooth bridge, life of a call
-src/tools.js          the 8 tools and their rules
+src/phone.js          the phone line: call audio from the bridge, life of a call, the one-time code at its start
+src/tools.js          the 16 tools and their rules
 src/knowledge.js      search over the knowledge passages (for ask_cathay)
 knowledge/            general Cathay knowledge: short passages, each with source and date checked
 src/cathay.js         the one adapter to Cathay's systems
 src/mock-cathay/      mock Membership, Orders and Schedule systems
-src/model/            voice model drivers (scripted.js, nova.js)
+src/model/            voice model drivers (nova.js, scripted.js) and the system prompt (prompt.js; prompt_demo.js optional)
 src/screens/          projector view, trip page, texts, emails
 src/payment.js        what happens when a booking is paid
 src/messages.js       texts and email (log, or live by email)
@@ -120,6 +124,8 @@ curl -X POST -H "x-admin-key: <ADMIN_SECRET>" http://localhost:8080/reset       
 The trip page link is printed in the server console with the text message.
 
 All settings are in `.env.example`. `MODEL=scripted` runs the golden path without a voice model, and `MESSAGES=log` prints texts and emails to the console instead of sending them.
+
+**Demo mode.** `PROMPT=demo` shortens the call to about 90 seconds for the stage (`src/model/prompt_demo.js`): CATE reads out only the best flight, asks one "same as last time?" question, and shows the booking on the trip page to check instead of reading it out. The tools enforce the same rules in both modes. Without the setting, or without that file, CATE runs the full call.
 
 ## Privacy and security
 

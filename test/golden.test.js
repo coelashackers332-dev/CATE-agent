@@ -3,6 +3,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
+// The full call unless a test asks for the demo one: a PROMPT=demo in .env must not change what these tests check.
+delete process.env.PROMPT;
+
 process.env.SCRIPT_STEP_MS = '0';
 const { config } = await import('../src/config.js');
 // Fixed test settings, whatever a local .env says: nothing is really sent, and the scripted model plays the call.
@@ -62,7 +65,7 @@ test('golden path: scripted call, the member pays, confirmed trip page', async (
 
     // Tools ran in the order the rules require.
     const tools = events.filter((e) => e.kind === 'tool_call').map((e) => e.name);
-    assert.deepEqual(tools, ['verify_caller', 'apply_profile', 'find_flights', 'text_options',
+    assert.deepEqual(tools, ['send_code', 'verify_caller', 'apply_profile', 'find_flights', 'text_options',
       'choose_option', 'set_preferences', 'set_assistance', 'set_baggage', 'set_special_request', 'hold_booking', 'hold_booking', 'send_pay_link']);
     // No phone number or email address ever reaches the projector.
     const feed = JSON.stringify(events);

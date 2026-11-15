@@ -146,6 +146,15 @@ const CSS = `
   .pay:focus-visible, .pick:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
   .paynote { margin-top: 10px; font-size: 17px; }
 
+  /* Check your booking: the summary before the hold */
+  .sum { display: grid; gap: 12px; margin: 0; }
+  .sum dt { font-size: 14px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .sum dd { margin: 2px 0 0; font-size: 21px; font-weight: 700; line-height: 1.3; font-variant-numeric: tabular-nums; }
+  .check .total { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 2px dashed var(--line-2); font-size: 19px; }
+  .check .total b { font-size: 30px; color: var(--jade); font-variant-numeric: tabular-nums; }
+  @media (prefers-color-scheme: dark) { .check .total b { color: var(--accent); } }
+  .check .soft { margin-top: 10px; font-size: 17px; }
+
   /* Answer buttons: the same answers he can say on the call. Filled = an open question, outlined = a change */
   .pick { display: block; width: 100%; min-height: 64px; margin-top: 14px; padding: 14px 18px; border: 2px solid var(--go); border-radius: 14px; background: var(--go); color: var(--go-ink); font: 700 22px/1.3 var(--sans); cursor: pointer; -webkit-appearance: none; appearance: none; }
   .pick:hover { background: var(--go-hover); border-color: var(--go-hover); }
@@ -195,7 +204,8 @@ function version(s) {
 
 // Pages that can still change keep themselves in step with the call: when the version on the server
 // differs, the page reloads. It reads its own address only; nothing is sent or loaded from elsewhere.
-// shortcut: re-reads the whole page every 3 seconds, fine during a call; give it a small version route if pages stay open for hours.
+// Every second, so a flight he chooses by voice shows on his phone while CATE is still saying it back.
+// shortcut: re-reads the whole page every second, fine during a call on one server; give it a small version route if pages stay open for hours.
 const LIVE = `
 <script>
 setInterval(async () => {
@@ -204,7 +214,7 @@ setInterval(async () => {
     const v = /<html[^>]* data-v="([^"]*)"/.exec(await r.text());
     if (r.ok && (v ? v[1] : '') !== document.documentElement.dataset.v) { scrollTo(0, 0); location.reload(); }
   } catch {}
-}, 3000);
+}, 1000);
 </script>`;
 
 function shell(title, body, live = false) {
@@ -249,6 +259,24 @@ function leg(dir, seg, fromCity) {
 
 /** He pays himself when the order names no other payer. */
 const paysHimself = (o) => !o?.payer || String(o.payer).toLowerCase() === String(o.passenger ?? '').toLowerCase();
+
+/** The whole booking before the hold, so he can check it on screen instead of hearing it read out. Nothing is held yet. */
+function checkCard(sum) {
+  const row = (k, v) => (v ? `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>` : '');
+  const fl = (seg) => `${fmtDay(seg?.dep, true)} · ${fmtTime(seg?.dep)} → ${fmtTime(seg?.arr)} · ${seg?.flight ?? ''}`;
+  return `<section class="sec check" aria-label="Check your booking">
+  <dl class="sum">
+    ${row(`Going to ${sum.out?.city ?? sum.out?.to ?? ''}`, fl(sum.out))}
+    ${row('Coming back', fl(sum.back))}
+    ${row('Seat', cap(sum.seat))}
+    ${row('Meal', cap(sum.meal))}
+    ${row('Help at the airport', sum.help)}
+    ${row('Extra bags', sum.extra_bags ? String(sum.extra_bags) : 'None')}
+  </dl>
+  <p class="total"><span>Total, return</span><b>${esc(money(sum.total_hkd))}</b></p>
+  <p class="soft">Nothing is booked until you say yes on the call.</p>
+</section>`;
+}
 
 function optionsState(page, order, payUrl, live) {
   const options = page.options ?? [];
@@ -314,11 +342,12 @@ function optionsState(page, order, payUrl, live) {
     ? `<p>${options.length > 1 ? 'All come back' : 'Coming back'} on <b>${esc(fmtDay(options[0].back.dep))}</b>, leaving ${esc(tripCity(options[0]))} at ${esc(fmtTime(options[0].back.dep))}.</p>`
     : '';
 
+  const check = !held && page.summary ? checkCard(page.summary) : '';
   return shell(`Your ${city} flights`, `${top(
-    held ? `Your ${city} trip is held` : `Your ${city} flights`,
-    held ? '' : 'The same flights CATE read to you on the call.',
+    held ? `Your ${city} trip is held` : check ? 'Check your booking' : `Your ${city} flights`,
+    held ? '' : check ? 'Is everything right? Say yes on the call to hold it.' : 'The same flights CATE read to you on the call.',
   )}
-${status}
+${check || status}
 <div class="sec">
 ${list}
 </div>

@@ -22,10 +22,12 @@ export function startSession({ call, runTool, emit }) {
 
   async function play() {
     const script = [
-      () => say("Hello, this is CATE, Cathay's personal booking service. To check it's you: where did you last fly with us?"),
-      () => hear('Osaka, last May.'),
       async () => {
-        const v = await tool('verify_caller', { answer: 'Osaka, last May' });
+        say("Hello, this is CATE, Cathay's personal booking service. For your security, I've just emailed you a six-digit code. Please read it to me.");
+      },
+      () => hear(`It's ${[...call.sentCode].join(' ')}.`),
+      async () => {
+        const v = await tool('verify_caller', { code: call.sentCode });
         if (!v.verified) throw new Error('verification did not pass');
         await tool('apply_profile');
         say('Thank you, Mr Wong. Which service would you like today: book a flight, change a booking, or a special request?');

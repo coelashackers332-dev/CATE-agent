@@ -75,10 +75,10 @@ test('a held booking\'s pay link shows only the ways to pay and one Pay button, 
   assert.match(res.headers.get('content-type'), /^text\/html/);
   assert.equal(res.headers.get('cache-control'), 'no-store');
   assert.equal(res.headers.get('x-robots-tag'), 'noindex');
-  assert.equal(res.headers.get('x-frame-options'), 'DENY');
+  assert.equal(res.headers.get('x-frame-options'), 'SAMEORIGIN', 'only our own projector may show it, inside the phone frame');
   const csp = res.headers.get('content-security-policy');
   assert.match(csp, /default-src 'none'/);
-  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /frame-ancestors 'self'/);
   const nonce = /script-src 'nonce-([^']+)'/.exec(csp)?.[1];
   const page = await read(res);
   assert.ok(nonce && page.includes(`<script nonce="${nonce}">`), 'the page script carries this response\'s nonce');

@@ -166,7 +166,7 @@ test('texts by email: each text goes to the address on file for that number, its
   await live({}, 'email').sendSms(wong().phone, text);
   assert.deepEqual(rcpts(), [`RCPT TO:<${wong().email}>`]);
   const { headers, parts } = parse(seen.message);
-  assert.equal(headers.subject, 'Cathay CATE: booked. Ref K7Q2XM, WONG TAK MING.');
+  assert.match(headers.subject, /^Cathay CATE: booked\. Ref K7Q2XM, WONG TAK MING\. \(\d\d:\d\d\)$/, 'first line, plus the time so Gmail does not stack them');
   assert.deepEqual(parts.map((p) => p.type), ['text/plain', 'text/html']);
   assert.equal(parts[0].text, text, 'the plain part: the same words as the text, nothing added');
 

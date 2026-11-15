@@ -1,6 +1,7 @@
 // MOCK Cathay systems (DATA.md §2a): Membership, Orders and Schedule over the in-memory store.
 // Same process as CATE, but behind a real HTTP boundary. Only src/cathay.js calls these routes.
 // In production that adapter points at Cathay's own systems and this folder is not used.
+import { randomInt } from 'node:crypto';
 import { store, newRef, newToken, findMember, setOrderStatus } from '../store.js';
 import { serviceKey } from './key.js';
 
@@ -23,6 +24,10 @@ async function readJson(req) {
 }
 
 const digits = (s) => String(s ?? '').replace(/\D/g, '');
+// One-time codes by member id: { code, expires }. One open code per member; a new one replaces it.
+// shortcut: in memory, cleared only by a restart or a new code; fine for one call at a time.
+const otps = new Map();
+const OTP_TTL_MS = 10 * 60 * 1000;
 const day = (dateTime) => dateTime.slice(0, 10);
 /** When a trip starts. Seeded flown orders have `segments`; holds made by CATE have `out` / `back`. */
 const tripStart = (order) => order.segments?.[0]?.date ?? order.out?.dep ?? '';
@@ -85,11 +90,29 @@ async function route(req, res, url) {
     return member ? send(res, 200, { member_id: member.member_id }) : send(res, 404, { error: 'no member with this number' });
   }
 
+  // ---- Membership: a one-time code for the caller. Cathay would email it itself; this mock hands it to the adapter,
+  // which emails it to the address on file for the calling number. The code is then checked here (below).
+  if (op === 'POST /membership/otp') {
+    const { member_id } = await readJson(req);
+    if (!store.members.some((m) => m.member_id === member_id)) return send(res, 404, { error: 'no such member' });
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    otps.set(member_id, { code, expires: Date.now() + OTP_TTL_MS });
+    return send(res, 200, { ok: true, code });
+  }
+
   // ---- Membership: the answer is checked here, so the caller of this route never sees the right one.
+  // With a one-time code open for the member, only that code passes (once, before it expires).
+  // Without one, the old question "where did you last fly with us?" still works.
   if (op === 'POST /membership/verify') {
     const { member_id, answer, call_id = null } = await readJson(req);
-    const lastFlown = ordersOf(member_id).find((o) => o.status === 'flown');
-    if (!lastFlown || !answerMatches(lastFlown, answer)) return send(res, 200, { ok: false });
+    const open = otps.get(member_id);
+    if (open) {
+      if (Date.now() > open.expires || digits(answer) !== open.code) return send(res, 200, { ok: false });
+      otps.delete(member_id);
+    } else {
+      const lastFlown = ordersOf(member_id).find((o) => o.status === 'flown');
+      if (!lastFlown || !answerMatches(lastFlown, answer)) return send(res, 200, { ok: false });
+    }
     const token = newToken();
     // ponytail: tokens live until reset; give them an expiry when calls stop being one at a time.
     store.sessions.set(token, { member_id, call_id });

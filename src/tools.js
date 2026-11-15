@@ -1,23 +1,51 @@
 // The tools the voice model can call (CONTRACTS.md §3). The model talks; every rule is enforced here.
+// What each tool takes and returns: docs/TOOLS.md. How this file fits into a call: docs/CODE.md.
+//
+// Map of this file
+//   1. Rules as data: cities we fly, the wheelchair table (RULES, ASSISTANCE), tiers, seat and meal lists, limits.
+//   2. specs: the tool list the voice model sees (name, description, inputs). 16 tools, in the usual order of a call.
+//   3. createTools(deps):
+//        shared helpers: profileOf, tripPage, sendOptions, readback, nextStep (the one next question), recorded
+//        handlers: one function per tool, send_code ... ask_cathay
+//        runTool: the single entry point (verification first, only declared inputs, never throws, every call logged)
 //
 // createTools(deps) → { specs, runTool }
 //   deps.cathay   : either a FACTORY (callId) => adapter, e.g. (callId) => createCathay({ callId }), so the projector
 //                   lines carry the call id (preferred); or one adapter instance (its lines then carry its own callId).
 //   deps.messages : { sendSms(to, body), sendEmail(to, subject, html, text) }
 //   deps.texts    : { optionsSms(options, link), payRequestSms(order, travellerName) }
-//   deps.emails   : (not used by the tools any more: the member pays himself on his trip page)
 //   deps.baseUrl  : public address used in trip-page links (default config.baseUrl)
 //   deps.knowledge: { search(question, limit) → Promise<[{ title, text, source, checked }]> }, [] when nothing is relevant.
 //                   Optional: without it ask_cathay always answers "I do not have that information".
 //
 // Besides the fields in CONTRACTS §2, tools keep on the call object (server side, never sent to the model as such):
 //   call.profile (model-safe profile + recent trips), call.order (the hold), call.verifyFails, call.payRequested.
+import { existsSync } from 'node:fs';
 import { config } from './config.js';
-import { emit } from './events.js';
+import { emit, bus } from './events.js';
 import { store, newPageCode } from './store.js';
 import { fmtDay } from './screens/trip.js';
 
 const MAX_VERIFY_TRIES = 3;
+
+// Calls where CATE has said the read-back's last question ("Shall I hold this booking?") since the last read-back.
+// Nova reports each sentence it actually speaks, so a "yes" said over an unfinished read-back is not taken as consent.
+const heardHoldQuestion = new Set();
+// Calls where the caller has spoken since the last code went out: a code he never read out is not checked (it was invented).
+const spokeSinceCode = new Set();
+// Demo: calls where CATE has started saying the hold question since the read-back (a quick "yes" over it counts).
+const startedHoldQuestion = new Set();
+bus.on('event', (ev) => {
+  if (ev.kind === 'caller_said') spokeSinceCode.add(ev.call_id);
+  if (ev.kind === 'cate_said') startedHoldQuestion.add(ev.call_id);
+  if (ev.kind === 'cate_said' && /\bhold\b/i.test(ev.text ?? '') && /\bbooking\b/i.test(ev.text ?? '')) heardHoldQuestion.add(ev.call_id);
+});
+const MAX_CODES = 3;   // one-time codes emailed per call
+// ---- Demo mode (optional). PROMPT=demo with src/model/prompt_demo.js present: the 90-second stage call.
+// The rules are the same; only some hints get shorter (options, one "same as last time" question, the booking checked on
+// the trip page instead of read out, a quick "yes" over the hold question). Every demo() branch below is one of those.
+const DEMO_PROMPT = new URL('./model/prompt_demo.js', import.meta.url);
+const demo = () => (process.env.PROMPT ?? '').trim().toLowerCase() === 'demo' && existsSync(DEMO_PROMPT);
 const MAX_PASSAGES = 3;   // how many knowledge passages ask_cathay hands the model
 
 // ---- Cities we fly: every airport in data/flights.json (the OAG schedule). Anything else gets "no flights", never a guess.
@@ -46,7 +74,11 @@ const codeOf = (said) => {
   const s = String(said ?? '').trim().toLowerCase();
   return Object.keys(CITIES).find((code) => code.toLowerCase() === s || CITIES[code].toLowerCase() === s) ?? ALIASES[s] ?? null;
 };
-const MAX_DAYS_NAMED = 5;   // "what days do you fly?": at most this many days are read out, from his date (or today) on
+const MAX_DAYS_NAMED = 5;
+const NEAR_DAYS = 2;   // exact days: if he cannot fly on the day he named, offer flights up to this many days either side
+const dayOf = (iso) => String(iso).slice(0, 10);
+const daysBetween = (a, b) => Math.round((Date.parse(`${a}T00:00:00Z`) - Date.parse(`${b}T00:00:00Z`)) / 864e5);
+const shiftDay = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);   // "what days do you fly?": at most this many days are read out, from his date (or today) on
 
 // ---- Wheelchair rule table (IATA special service request codes). Asked in this order; the first "no" sets the code.
 const RULES = [
@@ -73,7 +105,6 @@ const MEALS = ['standard', 'vegetarian', 'vegan', 'halal', 'kosher', 'hindu', 'd
 const SEAT_NUMBER = /^([1-9]|[1-6]\d|70)[ABCDEFGHJK]$/;
 const MAX_EXTRA_BAGS = 3;
 const MAX_REQUESTS = 3;
-const NO_REQUEST = 'No special requests.';
 
 // ---- Small helpers
 const fail = (error) => ({ ok: false, error });
@@ -97,13 +128,19 @@ const segment = (f) => ({ flight: f.flight, from: f.from, to: f.to, city: cityOf
 
 const specs = [
   {
+    name: 'send_code',
+    description: 'Emails a new six-digit one-time code to the email address on the membership of the number he is calling from. The first code is sent by itself when the call starts, '
+      + 'so call this only if he asks for a new code or the code has expired. You never learn the address or the code.',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
     name: 'verify_caller',
-    description: 'Call first, as soon as the caller has answered "Where did you last fly with us?". Pass the answer in his own words. '
-      + 'The phone number comes from the phone network, never from speech. If verified is false, ask the question once more and say nothing about his account.',
+    description: 'Call when he reads out the code from the email. Pass the six digits, e.g. "482915". '
+      + 'The phone number comes from the phone network, never from speech. If verified is false, do what the error says and say nothing about his account.',
     inputSchema: {
       type: 'object',
-      properties: { answer: { type: 'string', description: 'What the caller said, e.g. "Osaka, last May"' } },
-      required: ['answer'],
+      properties: { code: { type: 'string', description: 'The six digits he read out, e.g. "482915"' } },
+      required: ['code'],
     },
   },
   {
@@ -115,16 +152,19 @@ const specs = [
   {
     name: 'find_flights',
     description: 'Call when you know the destination city and the dates. Returns at most 3 options from the Cathay schedule, already matched to his profile. '
+      + 'Exact days ("on the 16th for five days", "the 16th to the 21st"): pass depart_on and return_on. A vague time ("after Christmas, back before New Year"): pass after and before. '
       + 'Read out read_out and return_flight slowly, one option at a time, and say left_out if it is there. Never say a flight, time or price that is not in the result.',
     inputSchema: {
       type: 'object',
       properties: {
         to: { type: 'string', description: 'Destination city as the caller said it, e.g. "Vancouver"' },
-        after: { type: 'string', description: 'Leave after this date, YYYY-MM-DD' },
-        before: { type: 'string', description: 'Be back before this date, YYYY-MM-DD' },
+        depart_on: { type: 'string', description: 'The day he wants to leave, YYYY-MM-DD, when he names a day' },
+        return_on: { type: 'string', description: 'The day he wants to fly back, YYYY-MM-DD: the day he names, or the day he leaves plus how long he stays' },
+        after: { type: 'string', description: 'Only for a vague time: leave after this date, YYYY-MM-DD' },
+        before: { type: 'string', description: 'Only for a vague time: be back before this date, YYYY-MM-DD' },
         from: { type: 'string', description: 'Departure city. Leave out for Hong Kong.' },
       },
-      required: ['to', 'after', 'before'],
+      required: ['to'],
     },
   },
   {
@@ -184,6 +224,12 @@ const specs = [
         none: { type: 'boolean', description: 'True if he has no special request' },
       },
     },
+  },
+  {
+    name: 'keep_as_last_time',
+    description: 'Call when he says yes to keeping everything as last time: the seat and meal on his membership, the same wheelchair help as on his last flight, '
+      + 'and no extra bags or special requests. One answer for all of them. Never call it unless he agreed to all of that.',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'set_assistance',
@@ -274,13 +320,19 @@ export function createTools(deps) {
   }
 
   /** Creates or refreshes this call's one view-only trip page and returns its link. Only a call creates pages. */
+  /** Sends a text without holding up the call: the mail server takes about 3 s, and CATE should not wait for it.
+   * messages.js shows the result on the projector; a failure is also logged here. */
+  function sendInBackground(to, body) {
+    Promise.resolve().then(() => deps.messages.sendSms(to, body)).catch((err) => console.error(`[tools] text not sent: ${err.message}`));
+  }
+
   function tripPage(call) {
     call.pageCode ??= newPageCode();
     // A booking changed without new flights has no options on this call: the page lasts until that trip is over.
     const trips = call.options?.length ? call.options : [call.order].filter(Boolean);
     const lastArrival = trips.map((o) => o.back.arr.slice(0, 10)).sort().at(-1);
     const expires = new Date(Date.parse(lastArrival) + 864e5).toISOString().slice(0, 10);   // the day after the trip
-    store.pages.set(call.pageCode, { member_id: call.memberId, options: call.options, ref: call.ref ?? null, expires });
+    store.pages.set(call.pageCode, { member_id: call.memberId, options: call.options, ref: call.ref ?? null, expires, summary: call.ref ? null : call.summary ?? null });
     return `${baseUrl}/v/${call.pageCode}`;
   }
 
@@ -290,10 +342,13 @@ export function createTools(deps) {
     call.payRequested = 'his trip page';
   }
 
-  /** Sends this call's options and trip page link to the member's own number on file (by email when TEXTS=email). */
-  async function sendOptions(call) {
+  /** Sends this call's options and trip page link to the member's own number on file (by email when TEXTS=email).
+   * background: true while CATE reads the options out (find_flights in page mode), so the call does not wait for the mail server. */
+  async function sendOptions(call, { background = false } = {}) {
     const link = tripPage(call);
-    await deps.messages.sendSms(call.callerId, deps.texts.optionsSms(call.options, link));
+    const body = deps.texts.optionsSms(call.options, link);
+    if (background) sendInBackground(call.callerId, body);
+    else await deps.messages.sendSms(call.callerId, body);
     emit(call.id, 'screen', { what: 'sms', summary: `text 1 to the caller: ${call.options.length} options + trip link` });
     emit(call.id, 'screen', { what: 'options_page', summary: 'trip page created', url: link });
   }
@@ -346,6 +401,14 @@ export function createTools(deps) {
   async function requiredStep(call, cathay) {
     const profile = await profileOf(call, cathay);
     if (!call.choice) return 'Ask which option he would like, then call choose_option.';
+    if (demo() && !call.prefs && !call.assistance && call.extraBags === undefined) {
+      const last = profile.recent_trips.find((t) => t.status === 'flown' && wheelchairCode(t.ssr));
+      // Short on purpose: over a 10-second question callers say "yes" too early and Nova can drop it (seen on stage).
+      const items = [profile.prefs?.seat && `${profile.prefs.seat} seat`, profile.prefs?.meal && `${profile.prefs.meal} meal`,
+        last && last.assistance.split('.')[0].toLowerCase().replace('from check-in to', 'to'), 'no extra bags'].filter(Boolean);
+      return `Ask exactly this, then stop and listen: "Same as last time? ${items.join(', ').replace(/^./, (c) => c.toUpperCase())}." `
+        + 'On a yes, call keep_as_last_time. If he changes something, record that change with its tool, and ask about the rest.';
+    }
     if (!call.prefs && wishesOf(profile)) return `Ask: "Your membership has ${wishesOf(profile)}. Is that still right?" Then call set_preferences with his answer.`;
     if (!call.assistance) {
       const last = profile.recent_trips.find((t) => t.status === 'flown' && wheelchairCode(t.ssr));
@@ -373,8 +436,12 @@ export function createTools(deps) {
   /** An answer was recorded: the model says `confirm` back at once, then asks the one next thing. Any earlier read-back is out of date. */
   async function recorded(call, cathay, confirm, extra = {}) {
     call.pendingHold = null;
+    if (call.summary) { call.summary = null; if (call.pageCode) tripPage(call); }   // the "check your booking" card is out of date
     if (call.changeRef) return { ok: true, ...extra, confirm, next: `Say: "${confirm}" Then call change_booking for booking ${call.changeRef} with this change.` };
-    const then = (await nextStep(call, cathay)) ?? 'call hold_booking now, in this same turn, without asking him anything first, and say the readback it returns.';
+    const then = (await nextStep(call, cathay)) ?? `call hold_booking now, in this same turn, without asking him anything first, and say the readback it returns.`;
+    if (demo()) {
+      return { ok: true, ...extra, confirm, next: `If he has already answered the next thing, record it now with its tool, without asking again or saying it back. Otherwise: ${then} Never record an answer he has not given.` };
+    }
     return { ok: true, ...extra, confirm, next: `Say: "${confirm}" Then: ${then} Never record an answer he has not given.` };
   }
 
@@ -402,17 +469,38 @@ export function createTools(deps) {
 
   const handlers = {
     // Rule: the number comes from the phone network (call.callerId); the answer is checked inside Cathay's system.
-    async verify_caller({ answer }, call, cathay) {
-      if (call.verified) return { ok: true, verified: true };
-      if ((call.verifyFails ?? 0) >= MAX_VERIFY_TRIES) {
-        return { ...fail('Too many wrong answers on this call. Say you cannot go on, and that a member of staff can help.'), verified: false };
-      }
+    // Rules: the code goes only to the email on file for the calling number (texts go by email); the model never sees it.
+    async send_code(_args, call, cathay) {
+      if (call.verified) return { ok: true, already_verified: true };
+      if ((call.codesSent ?? 0) >= MAX_CODES) return fail('No more codes on this call. Say you cannot go on, and that a member of staff can help.');
       call.memberId ??= (await cathay.findMemberByPhone(call.callerId))?.member_id ?? null;
       if (!call.memberId) return { ...fail('This phone number is not on a membership. Say you cannot go on, and that a member of staff can help.'), verified: false };
-      const check = await cathay.checkVerification(call.memberId, answer);
+      const { code } = await cathay.sendCode(call.memberId);
+      sendInBackground(call.callerId, `Cathay CATE: your code is ${code.slice(0, 3)} ${code.slice(3)}\n`
+        + 'Read it out to CATE on your call. It works for 10 minutes. Cathay never asks for this code any other way.');
+      emit(call.id, 'screen', { what: 'code', summary: 'one-time code emailed to the address on file' });
+      call.codesSent = (call.codesSent ?? 0) + 1;
+      spokeSinceCode.delete(call.id);
+      call.sentCode = code;   // server side only, never in a tool result: the scripted caller reads it like a person reads the email
+      return {
+        ok: true, sent: true,
+        say: 'Tell him you have just emailed a six-digit code to the email address on his membership, and ask him to read it out when it arrives. Never say a code yourself.',
+      };
+    },
+
+    async verify_caller({ code }, call, cathay) {
+      if (call.verified) return { ok: true, verified: true };
+      if ((call.verifyFails ?? 0) >= MAX_VERIFY_TRIES) {
+        return { ...fail('Too many wrong codes on this call. Say you cannot go on, and that a member of staff can help.'), verified: false };
+      }
+      if (!call.codesSent) return { ...fail('Call send_code first: it emails him a six-digit code. Then ask him to read it out.'), verified: false };
+      if (!spokeSinceCode.has(call.id)) return { ...fail('He has not read out a code yet. Do not guess one: wait for him to read the six digits from the email.'), verified: false };
+      const said = String(code ?? '').replace(/\D/g, '');
+      if (said.length !== 6) return { ...fail('Ask him to read out all six digits of the code in the email.'), verified: false };
+      const check = await cathay.checkVerification(call.memberId, said);
       if (!check.ok) {
         call.verifyFails = (call.verifyFails ?? 0) + 1;
-        return { ...fail('That answer does not match. Ask "Where did you last fly with us?" once more. Do not give hints.'), verified: false };
+        return { ...fail('That code does not match. Ask him to read it out again, digit by digit. If it is more than 10 minutes old, call send_code for a new one. Do not give hints.'), verified: false };
       }
       call.token = check.token;
       // Tier gate: CATE is the personal booking manager of Gold members and above, and of any member with a
@@ -455,7 +543,8 @@ export function createTools(deps) {
       // With the full OAG schedule a route flies most days, so only the first few days from his date (or today) are named.
       const daysWeFly = async () => {
         const today = new Date().toISOString().slice(0, 10);
-        const start = isDate(args.after) && args.after > today ? args.after : today;
+        const asked = isDate(args.depart_on) ? args.depart_on : args.after;
+        const start = isDate(asked) && asked > today ? asked : today;
         const all = await cathay.searchFlights({ from, to, after: start, before: '2100-01-01' });
         const days = (flights) => {
           const list = [...new Set([...flights].sort((a, b) => a.dep.localeCompare(b.dep)).map((f) => fmtDay(f.dep)))];
@@ -464,25 +553,59 @@ export function createTools(deps) {
         const out = days(all.out.filter((f) => f.return_fare_hkd != null));
         return out && all.back.length ? ` We fly to ${cityOf(to)} on ${out}, and back on ${days(all.back)}: tell him those days and ask if they would work.` : '';
       };
-      if (!isDate(args.after) || !isDate(args.before) || args.before <= args.after) {
+      // Exact days ("the 16th for five days") or a vague window ("after Christmas, back before New Year").
+      const exact = args.depart_on != null || args.return_on != null;
+      // He named the day he leaves but not how long he stays: ask just that (reading out the schedule took 25 s on a call).
+      if (exact && isDate(args.depart_on) && args.return_on == null) {
+        return fail('He has not said when he comes back. Ask only: "How many days will you stay?" Then call find_flights again with return_on, the day he leaves plus that many days.');
+      }
+      if (exact && (!isDate(args.depart_on) || !isDate(args.return_on) || args.return_on <= args.depart_on)) {
+        return fail(`Two days are needed as YYYY-MM-DD: the day he leaves (depart_on) and the day he flies back (return_on), after it. Ask him for them.${await daysWeFly()}`);
+      }
+      if (!exact && (!isDate(args.after) || !isDate(args.before) || args.before <= args.after)) {
         return fail(`Two dates are needed as YYYY-MM-DD: leave after, and be back before. Ask him for the dates.${await daysWeFly()}`);
       }
       const { prefs } = await profileOf(call, cathay);
-      const found = await cathay.searchFlights({ from, to, after: args.after, before: args.before });
+      // Exact days: search a few days around them, then prefer the days he named (the window search is "strictly after").
+      const found = await cathay.searchFlights(exact
+        ? { from, to, after: shiftDay(args.depart_on, -(NEAR_DAYS + 1)), before: shiftDay(args.return_on, NEAR_DAYS + 2) }
+        : { from, to, after: args.after, before: args.before });
 
       const earliest = prefs?.earliest_departure ?? '00:00';
       const notTooEarly = (f) => timeOf(f.dep) >= earliest;
-      // Return flight, the same for every option: not too early, nonstop if there is one, then the latest.
-      const back = found.back.filter(notTooEarly).sort((a, b) => nonstopFirst(a, b) || b.dep.localeCompare(a.dep))[0];
+      const away = (f, d) => Math.abs(daysBetween(dayOf(f.dep), d));   // days from the day he asked for
+      // Each option's own return flight: at least one night after it lands. Exact: on the day he asked, else the nearest.
+      // Window: not too early, nonstop if there is one, then the latest (the most time there).
+      const backFor = (f) => {
+        let backs = found.back.filter((b) => dayOf(b.dep) > dayOf(f.arr));
+        if (exact) backs = backs.filter((b) => away(b, args.return_on) <= NEAR_DAYS);
+        if (backs.some(notTooEarly)) backs = backs.filter(notTooEarly);
+        return backs.sort((a, b) => (exact ? away(a, args.return_on) - away(b, args.return_on) : 0)
+          || nonstopFirst(a, b) || (exact ? a.dep.localeCompare(b.dep) : b.dep.localeCompare(a.dep)))[0] ?? null;
+      };
       const priced = found.out.filter((f) => f.return_fare_hkd != null).sort((a, b) => a.dep.localeCompare(b.dep));
       const fits = priced.filter(notTooEarly);
-      // One option per flight number (its first date in the window), nonstop first, then by departure.
+      const reachable = (f) => backFor(f) != null && (!exact || away(f, args.depart_on) <= NEAR_DAYS);
+      // Up to 3 options, all of them when fewer fit.
+      // Exact: the day he named first, then the nearest days; on each day the flights that suit him first, nonstop first.
+      // Window: first one per flight number (its first date in the window), nonstop first, then by departure;
+      // then the same flights on other dates; then flights earlier than he likes.
       // ponytail: no seat map in the seed data, so the seat wish is carried to the booking, not used for ranking.
-      const outs = fits
-        .filter((f, i) => fits.findIndex((g) => g.flight === f.flight) === i)
-        .filter((f) => back && f.arr < back.dep)
-        .sort((a, b) => nonstopFirst(a, b) || a.dep.localeCompare(b.dep))
-        .slice(0, 3);
+      let pool;
+      let onDayAsked = true;
+      if (exact) {
+        pool = priced.filter(reachable).sort((a, b) => away(a, args.depart_on) - away(b, args.depart_on)
+          || Number(notTooEarly(b)) - Number(notTooEarly(a)) || nonstopFirst(a, b) || a.dep.localeCompare(b.dep));
+        // Flights on the day he named are the answer, even if there is only one; other days only when that day has none.
+        const sameDay = pool.filter((f) => away(f, args.depart_on) === 0);
+        if (sameDay.length) pool = sameDay;
+        else onDayAsked = false;
+      } else {
+        const firstOfEach = fits.filter((f, i) => fits.findIndex((g) => g.flight === f.flight) === i).filter(reachable)
+          .sort((a, b) => nonstopFirst(a, b) || a.dep.localeCompare(b.dep));
+        pool = [...firstOfEach, ...fits.filter(reachable), ...priced.filter((f) => !notTooEarly(f) && reachable(f))];
+      }
+      const outs = pool.filter((f, i) => pool.indexOf(f) === i).slice(0, 3);
       if (!outs.length) return fail(`No flights fit those dates. Do not suggest any flight that is not named here.${(await daysWeFly()) || ' Ask if other dates would work.'}`);
 
       const fastest = Math.min(...outs.map(clockHours));
@@ -491,12 +614,12 @@ export function createTools(deps) {
         const extra = Math.round((clockHours(f) - fastest) * 2) / 2;
         return `via ${f.stops.map(cityOf).join(' and ')}${extra > 0 ? `, ${extra} hours longer` : ''}`;
       };
-      const options = outs.map((f, i) => ({ id: String(i + 1), out: segment(f), back: segment(back), fare_hkd: f.return_fare_hkd, note: noteFor(f) }));
+      const options = outs.map((f, i) => ({ id: String(i + 1), out: segment(f), back: segment(backFor(f)), fare_hkd: f.return_fare_hkd, note: noteFor(f) }));
       call.options = options;
       call.choice = null;
       call.pendingHold = null;
 
-      const tooEarly = priced.length - fits.length;
+      const tooEarly = priced.filter((f) => !notTooEarly(f) && reachable(f) && !outs.includes(f)).length;   // early flights not offered
       // PAYMENT=page: the options go to his trip page at once (the member taps one there), without a "shall I send it?"
       // question: in a real call he asked for the email twice and the model, never asked to send, told him it could not.
       // The first search sends the email; a new search only refreshes the same page.
@@ -504,7 +627,7 @@ export function createTools(deps) {
       if (config.payment === 'page') {
         try {
           if (call.optionsSent) tripPage(call);
-          else { await sendOptions(call); call.optionsSent = true; }
+          else { await sendOptions(call, { background: true }); call.optionsSent = true; }
           sentNote = 'Then tell him these options are also on his trip page, in the email we just sent: he can tap the one he wants there, or tell you. ';
         } catch { /* the email failed: the spoken options are enough, and he can ask for it again (text_options) */ }
       }
@@ -514,12 +637,21 @@ export function createTools(deps) {
         // Spoken sentences, not a list: "Option 1: …, direct, …" sounded like a form being read out.
         read_out: options.map((o, i) => `The ${['first', 'second', 'third'][i]} option leaves on ${fmtDay(o.out.dep)} at ${spokenTime(o.out.dep)}. `
           + `It ${o.note ? `goes ${o.note}` : 'is direct'}, and costs ${spokenMoney(o.fare_hkd)} return.`),
-        return_flight: `Every option comes back on ${fmtDay(back.dep)}, leaving at ${spokenTime(back.dep)}.`,
+        return_flight: new Set(options.map((o) => o.back.dep)).size === 1
+          ? `Every option comes back on ${fmtDay(options[0].back.dep)}, leaving at ${spokenTime(options[0].back.dep)}.`
+          : options.map((o, i) => `The ${['first', 'second', 'third'][i]} option comes back on ${fmtDay(o.back.dep)}, leaving at ${spokenTime(o.back.dep)}.`).join(' '),
         ...(tooEarly > 0 && { left_out: `I left out ${tooEarly} flight${tooEarly === 1 ? ' that leaves' : 's that leave'} before ${spokenTime(`T${earliest}`.padStart(16))}, because you prefer not to leave that early.` }),
         // The model follows a hint in the result more reliably than the prompt, so the order of the next questions lives here.
-        next: `${tooEarly > 0 ? 'After the return flight, say left_out. ' : ''}`
-          + (sentNote ? `${sentNote}Then ask which option he would like. ` : 'Then ask "Shall I text these to you?" and after that which option he would like. ')
-          + 'As soon as he chooses, call choose_option.',
+        ...(exact && { on_day_asked: onDayAsked }),
+        next: (exact && !onDayAsked ? `There is no flight on ${fmtDay(args.depart_on)}: say so first, then offer these, the nearest days. ` : '')
+          + (demo()
+            ? (options.length === 1
+              ? `Say there is one flight${exact && onDayAsked ? ' that day' : ''}${sentNote ? ', that it is on the trip page you just emailed' : ''}, say the read_out sentence, and ask "Shall I take that one?". On a yes, call choose_option with option 1.`
+              : `Say that you found ${options.length} flights${sentNote ? ' and that they are on the trip page you just emailed' : ''}, `
+                + 'then say only the first read_out sentence, and ask "Shall I take that one, or would you like another?". As soon as he chooses, call choose_option.')
+            : `${tooEarly > 0 ? 'After the return flight, say left_out. ' : ''}`
+              + (sentNote ? `${sentNote}` : 'Then ask "Shall I text these to you?". ')
+              + (options.length === 1 ? 'Then ask if that flight suits him; on a yes, call choose_option with option 1.' : 'Then ask which option he would like. As soon as he chooses, call choose_option.')),
       };
     },
 
@@ -539,6 +671,23 @@ export function createTools(deps) {
     },
 
     // Rule: the code comes from the fixed table or from the last flown trip on file, never from the model.
+    // "Keep everything as last time": one yes for seat, meal, wheelchair help, bags and requests. Help comes from the last flown trip.
+    async keep_as_last_time(_args, call, cathay) {
+      if (!call.choice) return fail('Ask which option he would like first, then call choose_option.');
+      const profile = await profileOf(call, cathay);
+      const lastFlown = profile.recent_trips.find((t) => t.status === 'flown');
+      if (!lastFlown) return fail('He has no earlier trip on file. Ask about the seat and meal, wheelchair help and bags one at a time.');
+      const code = wheelchairCode(lastFlown.ssr);
+      call.seatChoice = {};
+      call.meal = undefined;
+      call.prefs = 'kept';
+      call.assistance = { code, summary: code ? ASSISTANCE[code] : NO_ASSISTANCE };
+      call.extraBags = 0;
+      call.requests ??= [];
+      await feesOf(call, cathay);
+      return recorded(call, cathay, 'Everything as last time.', { ...call.assistance, say: 'Never say the code.' });
+    },
+
     async set_assistance(args, call, cathay) {
       let code = null;
       if (yesNo(args.same_as_last_trip)) {
@@ -628,7 +777,30 @@ export function createTools(deps) {
       const confirmed = yesNo(args.caller_confirmed) === true && call.pendingHold?.option_id === option.id;
       if (!confirmed) {
         call.pendingHold = { option_id: option.id };
+        heardHoldQuestion.delete(call.id);
+        startedHoldQuestion.delete(call.id);
+        // The whole booking, for the "check your booking" card on his trip page (demo: the card replaces the spoken read-back).
+        call.summary = {
+          out: option.out, back: option.back,
+          seat: seatWords(seatOf(profile, call.seatChoice)), meal: call.meal ?? profile.prefs?.meal ?? null,
+          help: call.assistance.summary, extra_bags: call.extraBags ?? 0, total_hkd: option.fare_hkd + extrasOf(call),
+        };
+        if (call.pageCode) tripPage(call);
+        if (demo() && call.pageCode) {
+          return {
+            ok: true, needs_confirmation: true, on_trip_page: true,
+            // Only this sentence: given a spoken summary too, the model read that out instead (about 19 s on stage).
+            readback: 'Everything is on your trip page now: the flights, your seat and meal, the help at the airport and the total. Is it all correct? Shall I hold this booking?',
+          };
+        }
         return { ok: true, needs_confirmation: true, readback: readback(option, profile, call) };
+      }
+      // His yes counts only after he has heard the whole read-back, up to its question. Demo: the whole booking is on his
+      // trip page, and callers may talk over CATE to go faster, so a yes once CATE has started the question counts.
+      const heard = heardHoldQuestion.has(call.id) || (demo() && call.pageCode && startedHoldQuestion.has(call.id));
+      if (!heard) {
+        return fail('He said yes before he heard the whole read-back. Say the rest of the readback word for word, from where you stopped to its last question, '
+          + 'and wait for his answer. Nothing is held yet.');
       }
 
       // Name and passport come from the membership (the Orders system adds the passport itself); nothing is asked again.
@@ -807,7 +979,7 @@ export function createTools(deps) {
     let result;
     try {
       if (!spec) result = fail(`There is no tool called ${name}.`);
-      else if (name !== 'verify_caller' && !call.verified) result = fail('The caller is not verified yet. Ask "Where did you last fly with us?" and call verify_caller first.');
+      else if (name !== 'verify_caller' && name !== 'send_code' && !call.verified) result = fail('The caller is not verified yet. Call send_code, ask him to read out the code from the email, then call verify_caller.');
       else result = await handlers[name](input, call, adapterFor(call));
     } catch (err) {
       console.error(`[tools] ${name} failed: ${err.message}`);

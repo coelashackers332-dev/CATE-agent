@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderTripPage, notFoundPage } from '../src/screens/trip.js';
 import { optionsSms, bookedSms, payRequestSms } from '../src/screens/texts.js';
-import { payEmail, tripEmail, bookedEmail } from '../src/screens/emails.js';
+import { bookedEmail } from '../src/screens/emails.js';
 
 // The full member record, private fields included: the page must not print them even when handed them.
 const member = JSON.parse(readFileSync(new URL('../data/membership.json', import.meta.url), 'utf8'))[0];
@@ -233,39 +233,6 @@ test('SMS: stays ASCII and within 2 parts with awkward input', () => {
   assert.match(payRequestSms(order(), 'Mr Wong’s'), ASCII);
 });
 
-test('payEmail with a pay link: one big Pay button', () => {
-  const m = payEmail({ order: order(), travellerName: 'Wong Tak Ming', payerName: 'Daniel Wong', payUrl: 'https://pay.example.com/c/cs_test_1?a=1&b=2' });
-  assert.ok(m.subject.includes('Wong Tak Ming') && m.subject.includes('K7Q2XM'));
-  assert.ok(m.html.includes('href="https://pay.example.com/c/cs_test_1?a=1&amp;b=2"'));
-  assert.ok(m.html.includes('>Pay HKD 8,420</a>'));
-  assert.ok(!m.html.includes('Reply PAY'));
-  assert.ok(m.text.includes('https://pay.example.com/c/cs_test_1?a=1&b=2'));
-  for (const body of [m.html, m.text]) {
-    for (const s of ['Hello Daniel', 'Wong Tak Ming', 'Vancouver', 'Friday 19 February', 'HKD 8,420', 'K7Q2XM', 'test payment standing in for Cathay']) {
-      assert.ok(body.includes(s), `missing ${s}`);
-    }
-  }
-});
-
-test('payEmail without a pay link: reply PAY to the text', () => {
-  for (const payUrl of [null, 'javascript:alert(1)']) {
-    const m = payEmail({ order: order(), travellerName: 'Wong Tak Ming', payerName: 'Daniel Wong', payUrl });
-    assert.ok(m.html.includes('Reply PAY to the text message we sent you'));
-    assert.match(m.text, /reply PAY to the text message we sent you/i);
-    assert.ok(!m.html.includes('<a '));
-    assert.ok(!m.html.includes('javascript:') && !m.text.includes('javascript:'));
-  }
-});
-
-test('payEmail: inline styles only, text of 20 px or more, values escaped', () => {
-  const m = payEmail({ order: order(), travellerName: '<script>x</script>', payerName: 'Daniel Wong', payUrl: null });
-  assert.ok(!/<(style|script|img|link)\b/i.test(m.html));
-  assert.ok(m.html.includes('&lt;script&gt;'));
-  const sizes = [...m.html.matchAll(/font-size:(\d+)px/g)].map((x) => Number(x[1]));
-  assert.ok(sizes.length > 0 && Math.min(...sizes) >= 20, `smallest text is ${Math.min(...sizes)} px`);
-  for (const secret of PRIVATE) assert.ok(!m.html.includes(secret) && !m.text.includes(secret));
-});
-
 test('each option says when it lands, in local time, and says so when that is the next day', () => {
   const late = { ...options[1], out: { ...options[1].out, arr: '2027-02-20T06:10' } };
   const html = render(null, { ...page, options: [options[0], late] });
@@ -274,21 +241,8 @@ test('each option says when it lands, in local time, and says so when that is th
   assert.ok(!/lands d/.test(html), 'no bare "lands 07:40" next to the departure time');
 });
 
-// No SMS any more: the traveller gets his trip link, and later his booking, by email.
+// The booked email, sent after payment (the other messages are texts sent by email).
 const fonts = (html) => [...html.matchAll(/font-size:(d+)px/g)].map((x) => Number(x[1]));
-
-test('tripEmail: the flight options and one big button to the trip page', () => {
-  const m = tripEmail({ options, link, travellerName: 'Wong Tak Ming' });
-  assert.ok(m.subject.includes('Vancouver'));
-  assert.equal(m.html.split('<a ').length - 1, 1, 'one link only');
-  assert.ok(m.html.includes(`href="${link}"`) && m.html.includes('>Open your trip page</a>'));
-  assert.ok(m.text.includes(link));
-  for (const body of [m.html, m.text]) {
-    for (const t of ['Hello Wong Tak Ming', 'Friday 19 February', '11:40', '23:50', '09:10', 'HKD 8,420', 'HKD 6,900', 'via Tokyo', 'Wednesday 31 March', 'Illustrative fares', 'never asks for passwords or card numbers']) {
-      assert.ok(body.includes(t), `missing ${t}`);
-    }
-  }
-});
 
 test('bookedEmail: booked, the needs for staff, and the trip page link', () => {
   const m = bookedEmail({ order: order({ status: 'paid' }), profile: member, link });
@@ -301,20 +255,14 @@ test('bookedEmail: booked, the needs for staff, and the trip page link', () => {
   }
 });
 
-test('traveller emails: inline styles only, text of 20 px or more, escaped, nothing private, web links only', () => {
-  const odd = options.map((o) => ({ ...o, note: '<script>x</script>' }));
-  const mails = [
-    tripEmail({ options: odd, link, travellerName: 'Wong Tak Ming' }),
-    bookedEmail({ order: order({ status: 'paid', passenger: '<b>WONG</b>' }), profile: member, link }),
-  ];
-  for (const m of mails) {
-    assert.ok(!/<(style|script|img|link)/i.test(m.html));
-    assert.ok(Math.min(...fonts(m.html)) >= 20, `smallest text is ${Math.min(...fonts(m.html))} px`);
-    for (const secret of PRIVATE) assert.ok(!m.html.includes(secret) && !m.text.includes(secret));
-  }
-  assert.ok(mails[0].html.includes('&lt;script&gt;') && mails[1].html.includes('&lt;b&gt;WONG'));
+test('the booked email: inline styles only, text of 20 px or more, escaped, nothing private, web links only', () => {
+  const m = bookedEmail({ order: order({ status: 'paid', passenger: '<b>WONG</b>' }), profile: member, link });
+  assert.ok(!/<(style|script|img|link)/i.test(m.html));
+  assert.ok(Math.min(...fonts(m.html)) >= 20, `smallest text is ${Math.min(...fonts(m.html))} px`);
+  for (const secret of PRIVATE) assert.ok(!m.html.includes(secret) && !m.text.includes(secret));
+  assert.ok(m.html.includes('&lt;b&gt;WONG'));
   for (const bad of ['javascript:alert(1)', '//evil.example.com/v/x']) {
-    assert.ok(!tripEmail({ options, link: bad, travellerName: 'Wong Tak Ming' }).html.includes('<a '), `${bad} must not become a button`);
+    assert.ok(!bookedEmail({ order: order({ status: 'paid' }), profile: member, link: bad }).html.includes('<a '), `${bad} must not become a button`);
   }
 });
 
@@ -371,4 +319,13 @@ test('answers by button: only before the hold; names and ids are escaped; each a
   const seen = [null, '1', '2'].map((choice) => version(liveRender({ choice, payer: null, family: 'Daniel' })));
   seen.push(version(liveRender({ choice: '2', payer: 'self', family: 'Daniel' })), version(render(null)));
   assert.equal(new Set(seen).size, seen.length, `each state has its own version: ${seen.join(' ')}`);
+});
+
+test('check your booking: before the hold, the whole booking is on the page with the total, and nothing is held', () => {
+  const summary = { out: options[0].out, back, seat: 'a window seat near the front of the cabin', meal: 'vegetarian',
+    help: 'Wheelchair from check-in to the gate. Can manage stairs and walk to the seat.', extra_bags: 0, total_hkd: 8420 };
+  const html = render(null, { ...page, summary });
+  for (const t of ['Check your booking', 'Going to Vancouver', 'CX0V1', 'CX0V2', 'A window seat near the front of the cabin', 'Vegetarian',
+    'Wheelchair from check-in to the gate', 'HKD 8,420', 'Nothing is booked until you say yes']) assert.ok(html.includes(t), `missing ${t}`);
+  assert.ok(!render(order(), { ...page, ref: 'K7Q2XM', summary }).includes('aria-label="Check your booking"'), 'a held booking shows the hold, not the check');
 });

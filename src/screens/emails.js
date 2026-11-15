@@ -1,6 +1,6 @@
 // Email wording. Mail apps remove style sheets and scripts, so: inline styles only, one column,
 // text of 20 px or more, high contrast, text as text (no images). Colours follow Cathay's site.
-// There is no SMS: the traveller gets his trip link (tripEmail) and his booking (bookedEmail) by email.
+// The one designed email: the booking after payment (bookedEmail). Other messages are texts sent by email (messages.js).
 import { esc, fmtDay, fmtTime, money, needWords, tripCity, homeCity, seatText, bagsText } from './trip.js';
 
 const INK = '#2d2d2d', MUTED = '#595b5d', JADE = '#005d63', GO = '#2c4036';
@@ -23,78 +23,6 @@ ${inner}
 </div>
 </body>
 </html>`;
-
-/**
- * The pay request to the family payer.
- * @param {object} a
- * @param {object} a.order           a held order
- * @param {string} a.travellerName   who the flight is for
- * @param {string} a.payerName       who is asked to pay
- * @param {string|null} a.payUrl     checkout link, or null when payment is by SMS reply
- * @returns {{ subject: string, html: string, text: string }}
- */
-export function payEmail({ order, travellerName, payerName, payUrl }) {
-  const url = webLink(payUrl);
-  const city = tripCity(order);
-  const hello = firstName(payerName);
-  const going = `${fmtDay(order.out?.dep)}, ${fmtTime(order.out?.dep)}, ${homeCity(order)} to ${city} (${order.out?.flight})`;
-  const back = `${fmtDay(order.back?.dep)}, ${fmtTime(order.back?.dep)} (${order.back?.flight})`;
-  const help = (order.ssr ?? []).map(needWords).join('; ');
-  const fare = `${money(order.fare_hkd)} return`;
-  const rows = [['Going', going], ['Coming back', back], ['Seat', order.seat], ['Help', help], ['Booking reference', order.ref], ['Price', fare]]
-    .filter(([, v]) => v);
-
-  const intro = `${travellerName} booked this trip by phone with CATE, Cathay's automated travel assistant, and asked us to send you the payment request. The flights are held and nothing is paid yet.`;
-  const how = url ? 'To pay, use the Pay button below.' : 'To pay, reply PAY to the text message we sent you.';
-  const test = "This is a prototype. The payment is a test payment standing in for Cathay's payment page, and no real money moves. The fare is illustrative.";
-  const safe = "Cathay never asks for passwords or card numbers by email or text. If you weren't expecting this, you can ignore it and nothing is charged.";
-
-  const subject = `Payment request: ${travellerName}'s Cathay flight to ${city} (${order.ref})`;
-
-  const action = url
-    ? button(url, `Pay ${money(order.fare_hkd)}`)
-    : `<p style="margin:8px 0 24px;background:#f1f4f1;border-left:6px solid #367878;border-radius:4px;padding:18px 20px;font-size:24px;font-weight:bold;line-height:1.35;color:${INK};">Reply PAY to the text message we sent you.</p>`;
-
-  const html = page(`${travellerName} asks you to pay for a flight to ${city}`, [
-    para(`Hello ${hello},`), para(intro), ...rows.map(([k, v]) => row(k, v)), action, para(test), para(safe),
-  ].join('\n'));
-
-  const text = [
-    `Hello ${hello},`,
-    intro,
-    rows.map(([k, v]) => `${k}: ${v}`).join('\n'),
-    url ? `${how}\n${url}` : how,
-    test,
-    safe,
-  ].join('\n\n');
-
-  return { subject, html, text };
-}
-
-/**
- * The trip link and the flight options, sent to the traveller while he is on the call.
- * @param {{ options: object[], link: string, travellerName: string }} a
- * @returns {{ subject: string, html: string, text: string }}
- */
-export function tripEmail({ options, link, travellerName }) {
-  const url = webLink(link);
-  const city = tripCity(options[0]);
-  const backs = new Set(options.map((o) => o.back?.dep));
-  const back = backs.size === 1 && options[0]?.back ? `All come back on ${fmtDay(options[0].back.dep)}, leaving ${city} at ${fmtTime(options[0].back.dep)}.` : '';
-  const items = options.map((o) => [
-    `Option ${o.id}`,
-    [`${fmtDay(o.out?.dep)}, ${fmtTime(o.out?.dep)}, ${money(o.fare_hkd)}`, o.note, !back && o.back && `back ${fmtDay(o.back.dep)}, ${fmtTime(o.back.dep)}`].filter(Boolean).join(', '),
-  ]);
-  const intro = 'These are the flights CATE found for you. Tell CATE on the phone which one you would like. Your trip page shows them in large print.';
-  const fares = 'Illustrative fares. Prices are for the return trip, per person. Times are local at each airport.';
-  const html = page(`Your flights to ${city}`, [
-    para(`Hello ${travellerName},`), para(intro), ...items.map(([k, v]) => row(k, v)), back && para(back),
-    url && button(url, 'Open your trip page'), para(fares), para(SAFE),
-  ].filter(Boolean).join('\n'));
-  const text = [`Hello ${travellerName},`, intro, items.map(([k, v]) => `${k}: ${v}`).join('\n'), back, url && `Your trip page: ${url}`, fares, SAFE]
-    .filter(Boolean).join('\n\n');
-  return { subject: `Your Cathay flight options to ${city}`, html, text };
-}
 
 /**
  * The booking, after payment: flights, wishes, and what to show airport staff.
