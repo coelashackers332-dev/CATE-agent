@@ -41,7 +41,7 @@ bus.on('event', (ev) => {
   if (ev.kind === 'cate_said' && /\bhold\b/i.test(ev.text ?? '') && /\bbooking\b/i.test(ev.text ?? '')) heardHoldQuestion.add(ev.call_id);
 });
 const MAX_CODES = 3;   // one-time codes emailed per call
-// ---- Demo mode (optional). PROMPT=demo with src/model/prompt_demo.js present: the 90-second stage call.
+// ---- Demo mode (optional). PROMPT=demo with src/model/prompt_demo.js present (not included in this repository): a short stage call.
 // The rules are the same; only some hints get shorter (options, one "same as last time" question, the booking checked on
 // the trip page instead of read out, a quick "yes" over the hold question). Every demo() branch below is one of those.
 const DEMO_PROMPT = new URL('./model/prompt_demo.js', import.meta.url);
@@ -94,7 +94,7 @@ const ASSISTANCE = {
 const NO_ASSISTANCE = 'No wheelchair needed.';
 const wheelchairCode = (ssr) => ssr?.find((code) => code in ASSISTANCE) ?? null;
 
-// ---- Who gets CATE: Gold and above (GAME-PLAN 2026-11-15 §7). A member with a registered assistance need gets CATE
+// ---- Who gets CATE: Gold and above. A member with a registered assistance need gets CATE
 // at every tier (open point 1, proposed), so the accessibility feature is never behind a status wall.
 const TIERS_WITH_CATE = ['Gold', 'Diamond', 'Diamond Exec', 'Diamond Plus'];
 

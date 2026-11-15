@@ -338,7 +338,7 @@ One tool per answer. Each result has `confirm` (a sentence to say back) and `nex
 
 Option, seat and meal, and wheelchair help must be recorded before `hold_booking`. Baggage and requests are asked once but never block the hold. Name and passport come from the profile: the Orders system adds "HKG passport ending 478" to the booking; the number never reaches the model.
 
-**Tier gate (in `verify_caller`).** After the travel-history check, CATE reads the member's tier. Gold, Diamond, Diamond Exec and Diamond Plus get CATE; so does any member with a registered assistance need (game plan, open point 1). Anyone else is told kindly that CATE is part of Gold membership and above, and no tool works for the rest of the call.
+**Tier gate (in `verify_caller`).** After the code check, CATE reads the member's tier. Gold, Diamond, Diamond Exec and Diamond Plus get CATE; so does any member with a registered assistance need. Anyone else is told kindly that CATE is part of Gold membership and above, and no tool works for the rest of the call.
 
 ## 10. `find_booking` and `change_booking`
 

@@ -97,7 +97,7 @@ test('golden path: verify → profile → flights → text → assistance → ho
   assert.equal(call.memberId, 'DEMO-0001');
   assert.ok(store.sessions.has(call.token));
 
-  // 2. profile: the shape in DATA.md §4
+  // 2. profile: only what the model may see
   const { profile } = await run('apply_profile', {});
   assert.equal(profile.name, 'WONG TAK MING');
   assert.deepEqual(profile.prefs, { seat: 'window', seat_area: 'front', meal: 'vegetarian', bags: 1, earliest_departure: '09:00' });
@@ -474,7 +474,7 @@ test('PAYMENT=page: the options go to his trip page at once, the hold opens the 
   assert.equal(sent.sms.length, 2, 'no "Reply PAY" text');
 });
 
-// ---- GAME-PLAN 2026-11-15: tier gate, seat, meal, baggage, special requests, managing a booking
+// ---- Personal booking manager: tier gate, seat, meal, baggage, special requests, managing a booking
 
 const CHAN = '+85200000003';   // seeded Green member, no assistance need, last flew to Taipei
 

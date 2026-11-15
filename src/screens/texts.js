@@ -1,4 +1,4 @@
-// SMS wording. Rules (STACK.md section 2): text only, plain characters only (one curly quote or long
+// SMS wording. Rules: text only, plain characters only (one curly quote or long
 // dash turns the whole message into 70-character parts), and every detail is in the text itself:
 // the link is an extra.
 import { fmtDay, fmtTime, needWords, tripCity, homeCity } from './trip.js';

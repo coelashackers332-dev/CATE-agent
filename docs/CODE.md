@@ -25,7 +25,7 @@ A guide for reading the CATE code. It follows one phone call through the files, 
 | `src/server.js` | The one HTTP server: every route, the projector feed, and `wireApp()`, which connects all modules. Start here to see how things fit. |
 | `src/phone.js` | The phone line: one call at a time, call audio in and out, the start and end of a call. |
 | `src/model/nova.js` | The live voice model: Amazon Nova 2 Sonic over Bedrock's two-way stream. Sends audio and tool results, receives speech and tool calls. |
-| `src/model/prompt.js` | The system prompt: who CATE is, how it talks, the order of a call. `prompt_demo.js` (optional, `PROMPT=demo`) is a short version for the stage. |
+| `src/model/prompt.js` | The system prompt: who CATE is, how it talks, the order of a call. A shorter stage version (`prompt_demo.js`, `PROMPT=demo`) was used for the live demo and is not included; without it, CATE runs the full call. |
 | `src/model/scripted.js` | A stand-in for the voice model with no audio: it plays one rehearsed booking by calling the real tools. Used by the golden test and `POST /dev/simulate`. |
 | `src/model/echo.js` | A stand-in that plays the caller's voice back, to test the audio line without the model. |
 | `src/tools.js` | The 16 tools and all their rules. See the map at the top of the file. |

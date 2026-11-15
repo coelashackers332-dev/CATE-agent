@@ -2,7 +2,6 @@
 
 Every module is written against this file. If you need to change a contract, stop and say so in your report; don't change it on your own.
 
-Design docs (read-only, in the planning folder `D:\CATHAY HACKATHON\`): `onday/STACK.md` (§1 core rule, §2 messages and view-only pages, §3 golden path, §4 tools, §8 pitfalls), `onday/STACK-AWS.md` (§3 call flow), `onday/DATA.md` (§2a mock Cathay systems, §4 shapes, §5 seed data, §7 reset). Where they disagree, `STACK.md` wins (it is newer): for example, trip pages are rendered on every open from the booking's current state, not saved once.
 
 ## Already written (shared; don't edit)
 
@@ -59,7 +58,7 @@ export function createTools(deps) → { specs, runTool }
 //                                                         errors come back as { ok: false, error: "plain words" })
 ```
 
-The 7 tools and their rules are in `STACK.md` §4. Rules live in code, not in the prompt:
+The tools and their rules are in `docs/TOOLS.md`. Rules live in code, not in the prompt:
 
 - Nothing about the member is returned before `verify_caller` passes. The model never sees the correct answer.
 - `find_flights` returns only seeded flights, 2–3 options, ranked by profile (seat, `earliest_departure`); each option has an `id`.
@@ -84,7 +83,7 @@ The 7 tools and their rules are in `STACK.md` §4. Rules live in code, not in th
   ssr: ["WCHR"], payer: "Wong Tak Ming", passenger: "WONG TAK MING" }
 ```
 
-Golden-path expectation from the seed data (`DATA.md` §5): Vancouver, out after 2027-02-06, back before 2027-04-05, earliest departure 09:00 → 3 options: 11:40 HKD 8,420 · 23:50 HKD 7,960 · 09:10 via Tokyo HKD 6,900; return 31 Mar 13:30. The 06:30 flight is filtered as too early.
+Golden-path expectation from the seed data: Vancouver, out after 2027-02-06, back before 2027-04-05, earliest departure 09:00 → 3 options: 11:40 HKD 8,420 · 23:50 HKD 7,960 · 09:10 via Tokyo HKD 6,900; return 31 Mar 13:30. The 06:30 flight is filtered as too early.
 
 `set_assistance` stores its result on the call as `call.assistance = { code: "WCHR" | "WCHS" | "WCHC" | null, summary }`; `hold_booking` copies the code into `order.ssr`.
 
@@ -107,7 +106,7 @@ export function createCathay({ base, callId }) → {
 }
 ```
 
-Each call emits one `system` event (DATA.md §2a "What the projector shows"). `modelSafeProfile` is the shape in DATA.md §4: no phone, email or delegate contacts, plus `tier` and `passport_on_file` (true/false; never the number).
+Each call emits one `system` event (what the projector shows). `modelSafeProfile` is the profile the model may see: no phone, email or delegate contacts, plus `tier` and `passport_on_file` (true/false; never the number).
 
 ## 5. Model session (`src/model/<name>.js`)
 
@@ -128,7 +127,7 @@ export function startSession({ call, specs, runTool, sendAudio, onInterrupt, emi
 ```js
 // src/messages.js
 export function createMessages({ mode }) → { sendSms(to, body), sendEmail(to, subject, html, text) }   // mode 'log' prints; 'live' sends
-// src/screens/texts.js   (plain ASCII only, STACK.md §2 SMS rules)
+// src/screens/texts.js   (plain ASCII only, SMS rules)
 export function optionsSms(options, link) → string
 export function bookedSms(order, profile, link) → string
 export function payRequestSms(order, travellerName) → string        // "Reply PAY"
@@ -171,6 +170,6 @@ payRoute(req, res, code, notFound)           // GET/POST /pay/:code (section 7)
 - Wrong admin key, unknown or expired page codes and unknown paths all return the same not-found page (404). A bad Twilio signature returns 403.
 - `PAYMENT=sms`: `payEmail` gets `payUrl: null` and tells the payer to reply PAY.
 - 2026-11-14: no Twilio for the demo (calls reach a team phone bridged to a laptop), so PAY by text can't arrive. Payment is the demo pay page at `/pay/<trip page code>` (no money moves). `PAYMENT=page`: `send_pay_link` passes `payUrl: \`${baseUrl}/pay/${call.pageCode}\`` to `payEmail` and sends no "Reply PAY" text; when the traveller pays himself, the trip page shows a Pay button to the same link while the booking is held. A call started without Twilio must use the demo caller's number as `callerId` (as `/dev/simulate` does), because text 1 goes to that number's address on file.
-- 2026-11-15 (game plan): the member always pays for his own booking. `set_payer` is gone, nobody is asked who pays, and nothing goes to the family payer. With `PAYMENT=page`, `hold_booking` is followed straight by `send_pay_link`, which sends nothing: the trip page redirects to `/pay/<code>` while the booking is held. After payment the member gets the booked email (`bookedEmail`).
-- 2026-11-15 (game plan, personal booking manager): `verify_caller` refuses members below Gold unless they have a registered assistance need. New tools `set_baggage`, `set_special_request`, `find_booking`, `change_booking`; `set_preferences` takes a seat (window/aisle), cabin area, seat number or meal. Orders carry `seat_area`, `seat_number`, `extra_bags`, `extras_hkd`, `total_hkd`, `due_hkd`, `requests` and `passport` (last 3 digits). The pay page charges `due_hkd`. With `PAYMENT=page` the options and trip link are emailed on the first `find_flights`, and the confirmed hold opens the pay page itself. Seed: a second member (Green, Taipei) for the tier gate.
-- 2026-11-15 (code by email, exact dates, demo readiness): verification is a one-time code by email. New tool `send_code` (mock `POST /membership/otp`; the line runs it when a call starts, `src/phone.js`); `verify_caller` takes `code` instead of `answer`, only after the caller has spoken since the code went out; the mock checks the code once, within 10 minutes. `find_flights` takes exact days `depart_on` / `return_on` (or the old `after` / `before` window), and every option has its own return flight at least one night later. New tool `keep_as_last_time`. `hold_booking` step 1 sets `page.summary` (the "Check your booking" card) and a yes counts only after CATE has said "Shall I hold this booking?". The bridge starts a call on the DOM event `cate-answered` (sent by the auto-answer script); `?trigger=audio` keeps the old start on sound. The pay page may be framed by our own site (`frame-ancestors 'self'`) so the projector can show it. Texts sent by email get the time in their subject. A barge-in is logged as a `system` event (`Phone`, `barge-in`). `PROMPT=demo` with `src/model/prompt_demo.js` is an optional short stage call.
+- 2026-11-15 (the member pays): the member always pays for his own booking. `set_payer` is gone, nobody is asked who pays, and nothing goes to the family payer. With `PAYMENT=page`, `hold_booking` is followed straight by `send_pay_link`, which sends nothing: the trip page redirects to `/pay/<code>` while the booking is held. After payment the member gets the booked email (`bookedEmail`).
+- 2026-11-15 (personal booking manager): `verify_caller` refuses members below Gold unless they have a registered assistance need. New tools `set_baggage`, `set_special_request`, `find_booking`, `change_booking`; `set_preferences` takes a seat (window/aisle), cabin area, seat number or meal. Orders carry `seat_area`, `seat_number`, `extra_bags`, `extras_hkd`, `total_hkd`, `due_hkd`, `requests` and `passport` (last 3 digits). The pay page charges `due_hkd`. With `PAYMENT=page` the options and trip link are emailed on the first `find_flights`, and the confirmed hold opens the pay page itself. Seed: a second member (Green, Taipei) for the tier gate.
+- 2026-11-15 (code by email, exact dates, demo readiness): verification is a one-time code by email. New tool `send_code` (mock `POST /membership/otp`; the line runs it when a call starts, `src/phone.js`); `verify_caller` takes `code` instead of `answer`, only after the caller has spoken since the code went out; the mock checks the code once, within 10 minutes. `find_flights` takes exact days `depart_on` / `return_on` (or the old `after` / `before` window), and every option has its own return flight at least one night later. New tool `keep_as_last_time`. `hold_booking` step 1 sets `page.summary` (the "Check your booking" card) and a yes counts only after CATE has said "Shall I hold this booking?". The bridge starts a call on the DOM event `cate-answered` (sent by the auto-answer script); `?trigger=audio` keeps the old start on sound. The pay page may be framed by our own site (`frame-ancestors 'self'`) so the projector can show it. Texts sent by email get the time in their subject. A barge-in is logged as a `system` event (`Phone`, `barge-in`). `PROMPT=demo` loads an optional shorter stage prompt (`src/model/prompt_demo.js`, not included in this repository); without it, the full call.

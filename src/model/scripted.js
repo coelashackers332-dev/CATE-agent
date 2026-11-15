@@ -1,5 +1,5 @@
 // MODEL=scripted: a stand-in for the voice model. It ignores audio and plays the golden-path call
-// (STACK.md §3, steps 1–7) by calling the real tools in order, so the tools, screens and payment can be
+// by calling the real tools in order, so the tools, screens and payment can be
 // run end to end without a phone or a model. The Nova driver (model/nova.js) implements the same
 // startSession interface (CONTRACTS.md §5).
 // ponytail: one fixed script, no branching. It is a test harness and a last-resort demo, not a dialogue engine.

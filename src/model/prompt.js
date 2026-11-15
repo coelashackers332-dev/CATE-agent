@@ -4,7 +4,7 @@
 // nova.js sends the text CALL_CONNECTED once when the call starts, so CATE speaks first.
 // The steps are numbered as in the README ("How a call works"). Every rule that matters is enforced in the tools.
 
-// Optional: the short stage call (prompt_demo.js, PROMPT=demo). Loaded only if the file is there; without it, the full call.
+// Optional: a short stage call (prompt_demo.js, PROMPT=demo; not included in this repository). Loaded only if the file is there; without it, the full call.
 const demo = await import('./prompt_demo.js').catch(() => null);
 
 /** Sent to the model as text when the call connects. The model then greets the caller without waiting for a hello. */

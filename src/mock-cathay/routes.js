@@ -1,4 +1,4 @@
-// MOCK Cathay systems (DATA.md §2a): Membership, Orders and Schedule over the in-memory store.
+// MOCK Cathay systems: Membership, Orders and Schedule over the in-memory store.
 // Same process as CATE, but behind a real HTTP boundary. Only src/cathay.js calls these routes.
 // In production that adapter points at Cathay's own systems and this folder is not used.
 import { randomInt } from 'node:crypto';
@@ -48,7 +48,7 @@ function answerMatches(order, answer) {
 }
 
 /**
- * What CATE may hand the voice model (DATA.md §4): no phone, no email, no delegate contacts, and of the passport
+ * What CATE may hand the voice model: no phone, no email, no delegate contacts, and of the passport
  * only that it is on file (the booking takes it from here, server side; it is never read out).
  */
 const modelSafeProfile = (m) => ({

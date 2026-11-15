@@ -37,7 +37,7 @@ export const money = (n) => `HKD ${Number(n).toLocaleString('en-US')}`;
 
 /**
  * Needs card wording per IATA wheelchair code: what staff should do, and what the traveller can do.
- * Same meaning as the fixed table behind set_assistance (STACK.md section 4).
+ * Same meaning as the fixed table behind set_assistance (src/tools.js).
  */
 export const NEEDS = {
   WCHR: { short: 'Wheelchair from check-in to the gate', detail: 'I can walk short distances and climb stairs.' },

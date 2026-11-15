@@ -75,7 +75,7 @@ Caller's phone ──► the phone line (prototype: FaceTime Audio on the demo M
 | Voice model: Amazon Nova 2 Sonic over the call audio (`MODEL=nova`) | ✅ Done, run on real calls through Bedrock (Tokyo) |
 | Live email, texts sent as email (`TEXTS=email`) | ✅ Done, tested |
 | Real schedules (OAG snapshot): every Cathay route from Hong Kong, November–December 2026 | ✅ Done |
-| Personal booking manager (game plan 15 Nov): tier gate, "which service?", seat by side, cabin area or number, meal choice, extra baggage, special requests, passport from the profile | ✅ Done, tested |
+| Personal booking manager: tier gate, "which service?", seat by side, cabin area or number, meal choice, extra baggage, special requests, passport from the profile | ✅ Done, tested |
 | Manage a booking: change dates, seat, meal or baggage; a higher price opens the payment page for the difference | ✅ Done, tested |
 | Cancellations, upgrades, refunds of a lower fare | Next: handled by staff for now |
 | Real card checkout (Stripe or Cathay's payment gateway) | Planned for production |
@@ -84,7 +84,6 @@ Caller's phone ──► the phone line (prototype: FaceTime Audio on the demo M
 
 ```
 CONTRACTS.md          interfaces between modules (read before writing code)
-CLAUDE.md             working rules for this repo
 data/                 seed data for the mock Cathay systems (JSON)
 docs/                 CODE.md (how the code works, file by file) · TOOLS.md (the 16 tools)
 src/server.js         HTTP routes, projector feed, wiring
@@ -94,7 +93,7 @@ src/knowledge.js      search over the knowledge passages (for ask_cathay)
 knowledge/            general Cathay knowledge: short passages, each with source and date checked
 src/cathay.js         the one adapter to Cathay's systems
 src/mock-cathay/      mock Membership, Orders and Schedule systems
-src/model/            voice model drivers (nova.js, scripted.js) and the system prompt (prompt.js; prompt_demo.js optional)
+src/model/            voice model drivers (nova.js, scripted.js) and the system prompt (prompt.js)
 src/screens/          projector view, trip page, texts, emails
 src/payment.js        what happens when a booking is paid
 src/messages.js       texts and email (log, or live by email)
@@ -125,7 +124,7 @@ The trip page link is printed in the server console with the text message.
 
 All settings are in `.env.example`. `MODEL=scripted` runs the golden path without a voice model, and `MESSAGES=log` prints texts and emails to the console instead of sending them.
 
-**Demo mode.** `PROMPT=demo` shortens the call to about 90 seconds for the stage (`src/model/prompt_demo.js`): CATE reads out only the best flight, asks one "same as last time?" question, and shows the booking on the trip page to check instead of reading it out. The tools enforce the same rules in both modes. Without the setting, or without that file, CATE runs the full call.
+For the live stage demo we used a shorter version of the prompt, so the call fits in about 90 seconds (the booking is checked on the trip page instead of read out); it is not part of this repository. This repository runs the full call, and the tools enforce the same rules either way.
 
 ## Privacy and security
 

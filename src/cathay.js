@@ -1,4 +1,4 @@
-// The one adapter between CATE and Cathay's systems (DATA.md §2a). Tools reach Cathay data only through this file.
+// The one adapter between CATE and Cathay's systems. Tools reach Cathay data only through this file.
 // Demo: HTTP to the mock Membership / Orders / Schedule routes in this same process.
 // Production: point these functions at Cathay's membership and booking systems; nothing else changes.
 // Every function emits exactly one `system` event: one line on the projector. No phone numbers or emails in events.
@@ -68,7 +68,7 @@ export function createCathay({ base = `http://127.0.0.1:${config.port}`, callId 
       return ok ? { result: { ok: true, token }, summary: '✓ passed' } : { result: { ok: false }, ok: false, summary: '✗ did not match' };
     }),
 
-    /** → model-safe profile (DATA.md §4, without recent_trips). Throws without a valid token. */
+    /** → model-safe profile (no phone, email or delegate contacts; without recent_trips). Throws without a valid token. */
     getProfile: (token) => step('Membership', 'profile', async () => {
       const profile = need(await http('GET', '/membership/members/me', { token }));
       const { seat, meal, bags, earliest_departure: earliest } = profile.prefs ?? {};
